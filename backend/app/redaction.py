@@ -47,17 +47,25 @@ NAME_PATTERNS: list[re.Pattern] = [
     re.compile(r"\b(?:my name is|my name's|name:)\s+([A-Za-z'’-]+(?:\s+(?!and\b|i\b|my\b)[A-Za-z'’-]+){0,2})", re.IGNORECASE),
     # "I'm Sarah", "call me Sarah" — require a capitalised word
     re.compile(rf"\b(?:[Ii]'?m|[Ii] am|[Cc]all me|[Tt]his is)\s+({_NAME_SEQ})"),
+    # After a greeting, people introduce themselves in any case: "hi im jarett"
+    re.compile(r"\b(?:hi|hello|hey|hai|helo|good (?:morning|afternoon|evening))\b[\s,!.]*(?:there[\s,!.]+)?"
+               r"(?:i'?m|i am|this is|it'?s)\s+([A-Za-z'’-]+(?:\s+[A-Za-z'’-]+){0,2})", re.IGNORECASE),
     # Honorifics, including Malay ones
     re.compile(rf"\b(?:Mr|Mrs|Ms|Mdm|Madam|Dr|Encik|Cik|Puan|Tuan|Dato'?|Datin)\.?\s+({_NAME_SEQ})"),
     # Patronymics: "Ahmad bin Ali", "Siti binti Hassan", "Raj a/l Kumar"
     re.compile(rf"\b({_NAME_SEQ}\s+(?:bin|binti|bte|a/l|a/p|s/o|d/o)\s+{_NAME_SEQ})"),
 ]
 
-# Capitalised words that follow "I'm" but aren't names
+# Words that follow "I'm" / "hi I'm" but aren't names (compared lowercase)
 NOT_NAMES = {
-    "Worried", "Scared", "Not", "Feeling", "Pregnant", "Sorry", "Fine", "Okay", "Ok",
-    "Trying", "Having", "Taking", "Here", "Just", "Still", "So", "Very", "Really",
-    "Thinking", "Wondering", "Interested", "Asking", "Looking", "Over", "Under",
+    "worried", "scared", "not", "feeling", "pregnant", "sorry", "fine", "okay", "ok",
+    "trying", "having", "taking", "here", "just", "still", "so", "very", "really",
+    "thinking", "wondering", "interested", "asking", "looking", "over", "under",
+    "a", "an", "the", "in", "at", "on", "from", "with", "also", "currently", "new",
+    "back", "good", "well", "tired", "sick", "unwell", "concerned", "unsure", "confused",
+    "curious", "calling", "writing", "messaging", "going", "getting", "planning", "hoping",
+    "me", "my", "about", "kinda", "quite", "too", "bit", "wanting", "keen", "nervous",
+    "anxious", "struggling", "suffering", "experiencing", "bleeding", "married", "single",
 }
 
 
@@ -94,12 +102,27 @@ def _find_id_spans(text: str) -> list[Span]:
     return spans
 
 
+# A multi-word name ends at the first of these: "mei ling and I..." → "mei ling"
+NAME_ENDS = {"and", "i", "im", "i'm", "my", "here", "is", "am", "was", "for", "to", "but",
+             "from", "of", "who", "with", "because", "since", "had", "have", "has"}
+
+
+def _trim_name(name: str) -> str:
+    words = name.split()
+    kept = words[:1]
+    for w in words[1:]:
+        if w.lower() in NOT_NAMES or w.lower() in NAME_ENDS:
+            break
+        kept.append(w)
+    return " ".join(kept)
+
+
 def _find_name_spans(text: str) -> list[Span]:
     spans = []
     for pattern in NAME_PATTERNS:
         for m in pattern.finditer(text):
-            name = m.group(1).strip()
-            if name.split()[0] in NOT_NAMES:
+            name = _trim_name(m.group(1).strip())
+            if name.split()[0].lower() in NOT_NAMES:
                 continue
             start = m.start(1)
             spans.append(Span(start, start + len(name), "NAME"))

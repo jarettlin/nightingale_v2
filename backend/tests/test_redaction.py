@@ -56,6 +56,29 @@ def test_feelings_after_im_are_not_mistaken_for_names():
     assert redact("I'm Worried about my cycle").redacted_text == "I'm Worried about my cycle"
 
 
+@pytest.mark.parametrize("text, name, kept", [
+    ("hi im jarett and i am having a headache", "jarett", "having a headache"),  # found by hand in the demo
+    ("hello, it's sarah here", "sarah", "here"),
+    ("hey there i'm mei ling", "mei ling", ""),
+    ("good morning this is priya, trying to conceive", "priya", "trying to conceive"),
+    ("hi im wei jie looking for ivf info", "wei jie", "looking for ivf info"),
+])
+def test_lowercase_names_after_greetings_are_removed(text, name, kept):
+    out = redact(text).redacted_text
+    assert all(part not in out.lower() for part in name.split())
+    assert kept in out
+
+
+@pytest.mark.parametrize("text", [
+    "hi im having a headache",
+    "hey im so worried about my results",
+    "hello i'm not sure what to ask",
+    "hi i am pregnant and spotting",
+])
+def test_greetings_without_a_name_are_left_alone(text):
+    assert redact(text).redacted_text == text
+
+
 def test_known_identifiers_are_always_removed():
     result = redact("hi it's zara here, any slots friday?", known_identifiers=["zara"])
     assert "zara" not in result.redacted_text.lower()
