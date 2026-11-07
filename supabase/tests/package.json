@@ -1,0 +1,11 @@
+{
+  "name": "nightingale-db-checks",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node rls_check.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.10"
+  }
+}
