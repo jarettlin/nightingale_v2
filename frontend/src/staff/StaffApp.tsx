@@ -55,8 +55,14 @@ export default function StaffApp() {
   async function sendLink(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
-    const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: `${window.location.origin}/staff` } })
-    if (error) setError(error.message)
+    // Invite-only: this page never creates accounts (shouldCreateUser: false). Staff
+    // accounts are created by an admin with scripts/add_staff.py.
+    const { error } = await supabase.auth.signInWithOtp({
+      email, options: { emailRedirectTo: `${window.location.origin}/staff`, shouldCreateUser: false },
+    })
+    // Unknown emails get the same answer as staff ones, so the page can't be used to
+    // find out who works here. Only rate limiting is worth telling the person about.
+    if (error && error.status === 429) setError('Too many attempts. Please wait a few minutes and try again.')
     else setPhase('check-email')
   }
 
@@ -75,13 +81,14 @@ export default function StaffApp() {
           <h1>Clinic staff</h1>
           {phase === 'signin' ? (
             <form onSubmit={sendLink}>
-              <p className="muted">Sign in with your clinic email. We'll send you a link.</p>
+              <p className="muted">Sign in with the email your clinic admin invited. We'll send you a link.</p>
               <label className="field">Email
                 <input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
               </label>
               <button className="primary">Email me a sign-in link</button>
             </form>
-          ) : <p>Check <strong>{email}</strong> for a sign-in link, and open it on this device.</p>}
+          ) : <p>If <strong>{email}</strong> belongs to clinic staff, a sign-in link is on its way. Open it on this
+            device. No email? Ask your clinic admin to invite you.</p>}
           {error && <p className="error">{error}</p>}
         </div>
       </div>
@@ -93,8 +100,8 @@ export default function StaffApp() {
       <div className="staff staff-center">
         <div className="card signin">
           <h1>Not set up yet</h1>
-          <p>You're signed in, but this account isn't registered as clinic staff. An admin can add you with
-            <code> scripts/add_staff.py</code>.</p>
+          <p>You're signed in, but this account doesn't have clinic staff access. Ask your clinic admin to
+            invite you.</p>
           <button type="button" className="link" onClick={signOut}>Sign out</button>
         </div>
       </div>

@@ -12,12 +12,16 @@ In development, `/api/*` is proxied to `127.0.0.1:8000`, so there is no CORS set
 
 ## Staff console (`/staff`)
 
-Clinic staff sign in at http://localhost:5173/staff with an emailed link. The first sign-in creates their
-account; an admin then grants a role from `backend/`:
+Staff accounts are **invite-only**: the `/staff` page never creates accounts, and it gives the same answer
+for any email so it can't be used to find out who works at the clinic. An admin invites people from
+`backend/` (needs `SUPABASE_SECRET_KEY` in `backend/.env`):
 
-    .venv/bin/python scripts/add_staff.py nurse@clinic.example nurse "Nurse Tan"
+    .venv/bin/python scripts/add_staff.py add nurse@clinic.example nurse "Nurse Tan"
+    .venv/bin/python scripts/add_staff.py remove nurse@clinic.example
+    .venv/bin/python scripts/add_staff.py list
 
-Nurses and clinicians review and reply; front desk (`staff`) can acknowledge. Every rule is enforced by the API.
+The invite email signs them in at `/staff`; after that they use "Email me a sign-in link". Nurses and
+clinicians review and reply; front desk (`staff`) can acknowledge. Every rule is enforced by the API.
 
 ## Demo mode (no email, no Supabase, no OpenAI)
 
