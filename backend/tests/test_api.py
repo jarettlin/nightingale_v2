@@ -71,6 +71,27 @@ def test_patient_on_a_new_device_finds_their_conversation(api):
     assert api.get("/me/sessions", headers=bearer(make_token("someone", anonymous=True))).json()["sessions"] == []
 
 
+def test_email_link_in_another_browser_finds_the_same_conversation(api):
+    # Found by hand: the confirmation link opened in a browser with no saved session id,
+    # and the app started an empty conversation instead of resuming
+    guest = make_token("user-12", anonymous=True)
+    sid = api.post("/sessions", json={"source": "instagram"}, headers=bearer(guest)).json()["session"]["id"]
+    api.post(f"/sessions/{sid}/messages", json={"text": "how much does egg freezing cost?"}, headers=bearer(guest))
+
+    verified = make_token("user-12", email="twelve@example.com")   # same user, email now confirmed
+    [found] = api.get("/me/sessions", headers=bearer(verified)).json()["sessions"]
+    assert found == {**found, "id": sid, "converted": False}
+    assert api.get(f"/sessions/{sid}/messages", headers=bearer(verified)).status_code == 200
+
+
+def test_signed_in_non_patient_owns_the_sessions_they_start(api):
+    # Found by hand: such sessions were created with no owner at all
+    verified = make_token("user-13", email="thirteen@example.com")
+    sid = api.post("/sessions", json={}, headers=bearer(verified)).json()["session"]["id"]
+    assert api.post(f"/sessions/{sid}/messages", json={"text": "hi"}, headers=bearer(verified)).status_code == 200
+    assert api.get("/me/sessions", headers=bearer(verified)).json()["sessions"][0]["id"] == sid
+
+
 def test_guest_messages_are_rate_limited(api):
     sid = api.post("/sessions", json={}, headers=bearer(GUEST)).json()["session"]["id"]
     codes = [api.post(f"/sessions/{sid}/messages", json={"text": "hi"}, headers=bearer(GUEST)).status_code

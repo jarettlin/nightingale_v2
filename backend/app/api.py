@@ -179,7 +179,9 @@ def create_app(deps: Deps) -> FastAPI:
             source_channel=SOURCES.get(body.source.lower(), "direct"),
             identity_level="email" if who.patient_id else "anonymous",
             campaign_id=body.campaign, creative=body.creative, landing_page=body.landing_page,
-            guest_auth_user_id=who.auth_user_id if who.is_anonymous else None,
+            # Until they're a patient, the session belongs to their user id, signed in or not.
+            # (Leaving it unset made sessions nobody could open.)
+            guest_auth_user_id=None if who.patient_id else who.auth_user_id,
             patient_id=who.patient_id, converted_at=now() if who.patient_id else None)
         greeting = (f"Hi, I'm Nightingale, {deps.clinic.name}'s assistant. Ask me anything about our services, "
                     f"hours or what to expect. No sign-up needed.")
@@ -267,13 +269,15 @@ def create_app(deps: Deps) -> FastAPI:
 
     @app.get("/me/sessions")
     def my_sessions(who: Principal = Depends(principal), repo: Repository = Depends(get_repo)):
-        """A signed-in patient on a new device picks up their latest conversation
-        instead of an empty one (guests resume via the id stored on their device)."""
-        if not who.patient_id:
+        """Find someone's conversations by who they are, not by what one browser remembers.
+        The email link often opens in a different browser: it must land on the same
+        conversation, not a new empty one."""
+        if who.role == "staff":
             return {"sessions": []}
-        sessions = sorted(repo.sessions_for_patient(who.patient_id), key=lambda s: s.landing_timestamp, reverse=True)
-        return {"sessions": [{"id": s.id, "source_channel": s.source_channel, "landing_timestamp": s.landing_timestamp}
-                             for s in sessions]}
+        sessions = sorted(repo.sessions_for_auth_user(who.auth_user_id), key=lambda s: s.landing_timestamp,
+                          reverse=True)
+        return {"sessions": [{"id": s.id, "source_channel": s.source_channel, "landing_timestamp": s.landing_timestamp,
+                              "converted": s.patient_id is not None} for s in sessions]}
 
     @app.get("/me/escalations")
     def my_escalations(who: Principal = Depends(principal), repo: Repository = Depends(get_repo)):

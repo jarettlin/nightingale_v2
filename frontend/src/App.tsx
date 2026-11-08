@@ -52,20 +52,23 @@ export default function App() {
         const session = await ensureUser()
         setIsAnonymous(session.user.is_anonymous ?? false)
         setClinic(await api.clinic())
-        // Resume, in order: the conversation saved on this device, then (for a signed-in
-        // patient on a new device) their latest one. Only start fresh if neither exists.
-        const mine = session.user.is_anonymous ? [] : (await api.mySessions()).sessions.map((s) => s.id)
-        if (mine.length) setConverted(true)
-        for (const candidate of [store.get('session'), ...mine]) {
-          if (!candidate) continue
+        // Resume by asking the server what this user owns, not by what this browser
+        // remembers: the email link often opens in another browser, and must land on the
+        // same conversation. The id saved on this device only decides which one, if several.
+        const mine = (await api.mySessions()).sessions
+        const saved = store.get('session')
+        const ordered = [...mine.filter((s) => s.id === saved), ...mine.filter((s) => s.id !== saved)]
+        for (const candidate of ordered) {
           try {
-            const [thread, prof] = await Promise.all([api.messages(candidate), api.profile(candidate)])
-            store.set('session', candidate)
-            setSessionId(candidate)
+            const [thread, prof] = await Promise.all([api.messages(candidate.id), api.profile(candidate.id)])
+            store.set('session', candidate.id)
+            setSessionId(candidate.id)
             setMessages(thread.messages)
             setProfile(prof.profile)
-            // Back from the email link: pick up the sign-up where they left off
-            if (!session.user.is_anonymous && !mine.length && store.get('pendingEmail')) setSheetOpen(true)
+            setConverted(candidate.converted)
+            // Signed in (email verified) but not yet a patient: they're mid sign-up, so
+            // go straight to the consent step, in whichever browser the link opened
+            if (!session.user.is_anonymous && !candidate.converted) setSheetOpen(true)
             return
           } catch (err) {
             if (!(err instanceof ApiError) || ![404, 410].includes(err.status)) throw err

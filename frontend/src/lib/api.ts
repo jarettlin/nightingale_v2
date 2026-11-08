@@ -83,7 +83,8 @@ export const api = {
     request<{ session: { id: string; source_channel: string }; greeting: string; emergency_notice: string }>(
       'POST', '/sessions', params),
   messages: (sid: string) => request<{ messages: ChatMessage[] }>('GET', `/sessions/${sid}/messages`),
-  mySessions: () => request<{ sessions: { id: string; source_channel: string }[] }>('GET', '/me/sessions'),
+  mySessions: () =>
+    request<{ sessions: { id: string; source_channel: string; converted: boolean }[] }>('GET', '/me/sessions'),
   profile: (sid: string) => request<{ profile: Profile }>('GET', `/sessions/${sid}/profile`),
   send: (sid: string, text: string) => request<MessageResponse>('POST', `/sessions/${sid}/messages`, { text }),
   authStarted: (sid: string) => request<void>('POST', `/sessions/${sid}/auth-started`),

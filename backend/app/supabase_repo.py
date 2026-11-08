@@ -274,6 +274,15 @@ class SupabaseRepo:
             (patient_id,)).fetchall()
         return [LeadSession(**_str(r)) for r in rows]
 
+    def sessions_for_auth_user(self, auth_user_id: str) -> list[LeadSession]:
+        rows = self.conn.execute(
+            f"""select {', '.join(LEAD_FIELDS)} from public.lead_session
+                where purged_at is null
+                  and (guest_auth_user_id = %(uid)s
+                       or patient_id = (select id from public.patient where auth_user_id = %(uid)s))
+                order by created_at""", {"uid": auth_user_id}).fetchall()
+        return [LeadSession(**_str(r)) for r in rows]
+
     def escalations_for_patient(self, patient_id: str) -> list[Escalation]:
         return self._escalations("patient_id = %s order by created_at", (patient_id,))
 
