@@ -10,6 +10,7 @@ offer, and the live profile, which is what the frontend will render.
 
 import os
 import sys
+import time
 from pathlib import Path
 
 import httpx
@@ -48,11 +49,14 @@ def main(messages: list[str]) -> None:
             if not text:
                 continue
             print(f"\nyou: {text}")
+            started = time.perf_counter()
             r = api.post(f"/sessions/{start['session']['id']}/messages", json={"text": text})
+            elapsed = time.perf_counter() - started
             if r.status_code != 200:
                 print(f"  error {r.status_code}: {r.text[:200]}")
                 continue
             show(r.json())
+            print(f"  ({elapsed:.1f}s)")
 
 
 if __name__ == "__main__":

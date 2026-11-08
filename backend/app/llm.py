@@ -1,11 +1,12 @@
 """LLM access. Nothing else in the app talks to a model directly.
 
-`LLMClient` is the raw model interface (Claude in production, FakeLLM in tests).
+`LLMClient` is the raw model interface (OpenAI in production, FakeLLM in tests).
 `SafeLLM` wraps it and is the only thing the rest of the app is handed:
 it redacts every piece of patient text before the client sees it, and refuses
 to call the model at all if redaction fails.
 """
 
+import time
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -23,6 +24,12 @@ class LLMUnavailable(Exception):
 
 # Calls whose answer the server parses, so the model must return a JSON object
 JSON_PURPOSES = {"risk", "extract"}
+
+# Per-attempt timeouts. Normal calls take ~1–1.5s; a stalled request is cut
+# short and retried once instead of making the patient wait 15s. Worst case is
+# about two attempts, then the safe fallback for that step.
+TIMEOUTS = {"risk": 5.0, "reply": 8.0, "extract": 6.0}
+DEFAULT_TIMEOUT = 8.0
 
 
 class OpenAIClient:
@@ -88,13 +95,19 @@ class SafeLLM:
                  known_identifiers: list[str] | None = None) -> str:
         # Raises RedactionError before any network call if the text can't be made safe
         safe_text = redact_or_raise(patient_text, known_identifiers)
+        started = time.perf_counter()
         try:
-            reply = self._client.complete(system, safe_text, json_mode=purpose in JSON_PURPOSES)
+            reply = self._client.complete(system, safe_text, timeout_s=TIMEOUTS.get(purpose, DEFAULT_TIMEOUT),
+                                          json_mode=purpose in JSON_PURPOSES)
         except LLMUnavailable:
-            log_event("llm_unavailable", purpose=purpose)
+            log_event("llm_unavailable", purpose=purpose, latency_ms=_ms(started))
             raise
         except Exception as exc:
-            log_event("llm_unavailable", purpose=purpose, error_type=type(exc).__name__)
+            log_event("llm_unavailable", purpose=purpose, error_type=type(exc).__name__, latency_ms=_ms(started))
             raise LLMUnavailable(str(type(exc).__name__)) from exc
-        log_event("llm_call", purpose=purpose, input_chars=len(safe_text))
+        log_event("llm_call", purpose=purpose, input_chars=len(safe_text), latency_ms=_ms(started))
         return reply
+
+
+def _ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)

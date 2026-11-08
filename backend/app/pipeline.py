@@ -19,6 +19,8 @@ Safety replies and "please send this to the clinic" are not value events: they
 are the right thing to do, but they don't count as us having helped yet.
 """
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from app.config import DEFAULT_CLINIC, ClinicConfig
@@ -65,6 +67,7 @@ def handle_patient_message(repo: Repository, llm: SafeLLM, cipher: Cipher, lead_
                            clinic: ClinicConfig = DEFAULT_CLINIC, extractor_llm: SafeLLM | None = None,
                            known_identifiers: list[str] | None = None,
                            kb: KnowledgeBase | None = None) -> PipelineResult:
+    started = time.perf_counter()
     session = repo.get_lead_session(lead_session_id)
     if session is None:
         raise SessionNotFound(lead_session_id)
@@ -85,7 +88,17 @@ def handle_patient_message(repo: Repository, llm: SafeLLM, cipher: Cipher, lead_
         query = f"{previous} {query}"  # "how much does it cost?" -> search with what "it" was
     # Retrieval runs locally on redacted text: only clinic documents come back
     sources = (kb or default_kb()).search(query)
-    turn = handle_turn(text, llm, clinic, known_identifiers, sources=sources, history=history)
+
+    # Fact extraction doesn't depend on the risk check or the reply, so its model
+    # call runs alongside them. Only the model call is in the thread: the profile
+    # snapshot is read here, and writes happen below, on this thread's connection.
+    # (Memory is extracted even for high-risk messages: the clinician needs those facts.)
+    store = repo.memory_store(session.id)
+    current = store.current()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending_extraction = pool.submit(extract, text, current, extractor_llm)
+        turn = handle_turn(text, llm, clinic, known_identifiers, sources=sources, history=history)
+        extraction = pending_extraction.result()
     risk = turn.risk
 
     patient_msg = repo.add_message(StoredMessage(
@@ -106,9 +119,6 @@ def handle_patient_message(repo: Repository, llm: SafeLLM, cipher: Cipher, lead_
         escalation_required=risk.escalation_required,
     ))
 
-    # Memory is extracted even for high-risk messages: the clinician needs those facts
-    store = repo.memory_store(session.id)
-    extraction = extract(text, store.current(), extractor_llm)
     results = apply_operations(store, extraction.operations, patient_msg.id,
                                extracted_by="llm" if extraction.source == "llm" else "rule")
 
@@ -143,7 +153,8 @@ def handle_patient_message(repo: Repository, llm: SafeLLM, cipher: Cipher, lead_
                    risk_level=risk.risk_level.label, rule_codes=risk.rule_codes,
                    memory_applied=sum(r.applied for r in results))
     log_event("message_processed", lead_session_id=session.id, message_id=patient_msg.id,
-              risk_level=risk.risk_level.label, sent_as=sent_as, at=now())
+              risk_level=risk.risk_level.label, sent_as=sent_as, at=now(),
+              total_ms=int((time.perf_counter() - started) * 1000))
 
     return PipelineResult(
         patient_message_id=patient_msg.id,

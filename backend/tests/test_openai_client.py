@@ -28,6 +28,7 @@ def test_json_purposes_request_a_json_object_and_text_only_gets_redacted_input()
 
     assert calls[0]["response_format"] == {"type": "json_object"}
     assert calls[1]["response_format"] is None
+    assert (calls[0]["timeout"], calls[1]["timeout"]) == (5.0, 8.0)  # per-purpose, reaches the SDK
     assert "John Doe" not in calls[0]["messages"][1]["content"]
     assert calls[0]["model"] == "test-model"
 
