@@ -31,7 +31,7 @@ def test_honest_answer_about_what_the_ai_is(api, model, question):
     assert body["show_send_to_clinic"] is True
 
     # Fixed wording, not generated: the answer model was never asked
-    assert all(p["system"].startswith("You assess clinical risk") for p in model.prompts)
+    assert not any("SOURCES:" in p["system"] for p in model.prompts)
 
 
 def test_urgent_message_wins_over_identity_question(api):

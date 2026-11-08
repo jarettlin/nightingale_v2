@@ -18,11 +18,24 @@ from app.logs import log_event
 from app.redaction import RedactionError
 from app.risk import Risk, RiskAssessment, assess
 
+# Tuned against evals/risk_cases.jsonl (scripts/eval_risk.py). Without level
+# definitions the model sent every mention of a condition or medicine to a nurse.
 RISK_SYSTEM = (
-    "You assess clinical risk of ONE patient message for triage. You never give advice. "
-    "Identifiers are replaced with [REDACTED]. Reply with JSON only: "
-    '{"risk_level": "low|med|high", "reason": "<10 words>", "confidence": "low|med|high"}. '
-    "If unsure between two levels, choose the higher."
+    "You assess the clinical risk of ONE message sent to a fertility clinic's assistant, for triage. "
+    "You never give advice. Identifiers are replaced with [REDACTED]. The message may be in any language.\n"
+    "Levels:\n"
+    "- high: could be an emergency now. Chest pain or pressure, trouble breathing, heavy bleeding, fainting, "
+    "severe or one-sided abdominal or pelvic pain (especially if pregnant, period late, or after a procedure), "
+    "signs of stroke or a severe allergic reaction, thoughts of self-harm or suicide, possible overdose.\n"
+    "- med: a new, worsening or unexplained symptom a nurse should assess soon but that is not clearly an "
+    "emergency. For example fever, dizziness, a new lump, bleeding, spotting or bloating during or after "
+    "fertility treatment, injection-site reactions, missed treatment doses, low mood or distress.\n"
+    "- low: everything else. Questions about services, costs, hours or procedures; general education; and "
+    "background explaining why they are seeking care, such as long-standing irregular or painful periods, "
+    "trying to conceive, their age, a known condition like PCOS, medicines they take or have stopped, or past "
+    "history. Mentioning a condition or a medicine is not by itself a risk.\n"
+    "If the message describes a symptom and you are unsure between two levels, choose the higher.\n"
+    'Reply with JSON only: {"risk_level": "low|med|high", "reason": "<10 words>", "confidence": "low|med|high"}'
 )
 
 REPLY_SYSTEM = (
@@ -151,7 +164,7 @@ def handle_turn(text: str, llm: SafeLLM, clinic: ClinicConfig = DEFAULT_CLINIC,
                  f"and a nurse will reply within {clinic.response_window}.")
         return TurnResult(reply, risk, show_send_to_clinic=True, advice_generated=False)
 
-    checked = check_reply(reply, sources)
+    checked = check_reply(reply, sources, patient_text=with_history(text, history))
     log_event("reply_grounding", grounded=checked.grounded, dropped=checked.dropped,
               citations=len(checked.citations))
     if not checked.grounded:

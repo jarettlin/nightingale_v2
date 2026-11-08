@@ -106,6 +106,31 @@ def test_claims_must_agree_with_the_source_on_not(claim, expect_kept):
     assert check_reply(claim + markers, src).grounded is expect_kept
 
 
+def test_grouped_markers_count_as_separate_citations():
+    # The form OpenAI actually used: [S2,S3]
+    src = sources("I'm 38, I've had irregular periods for 6 months")
+    n = {c.heading: i for i, c in enumerate(src, 1)}
+    reply = (f"It is worth seeing a doctor if your periods have become irregular, or if you are trying to "
+             f"conceive and your cycles are irregular. [S{n['When to talk to a doctor']},S{n['What counts as irregular']}]")
+    g = check_reply(reply, src)
+    assert g.grounded and {m for m, _ in g.citations} == {f"S{n['When to talk to a doctor']}", f"S{n['What counts as irregular']}"}
+    assert "," not in g.text.split("irregular.")[-1]  # re-emitted as [S#] [S#] for the frontend
+
+
+def test_removing_a_marker_leaves_no_stray_comma():
+    src = sources("what time do you open on saturday")
+    g = check_reply("The clinic is open on Saturday from 9am to 1pm, [S1].", src)
+    assert g.grounded and ",." not in g.text and g.text.startswith("The clinic is open on Saturday from 9am to 1pm.")
+
+
+def test_numbers_from_the_patient_may_be_echoed_but_not_invented():
+    src = sources("I'm 38, I've had irregular periods for 6 months")
+    n = {c.heading: i for i, c in enumerate(src, 1)}[ "When to talk to a doctor"]
+    claim = f"At 38, it is worth seeing a doctor since your periods have become irregular. [S{n}]"
+    assert check_reply(claim, src, patient_text="I'm 38 and my periods are irregular").grounded
+    assert not check_reply(claim, src, patient_text="my periods are irregular").grounded
+
+
 def test_citations_to_sources_never_sent_are_removed():
     g = check_reply("We offer egg freezing and IVF. [S9]", sources("what services do you offer?"))
     assert not g.grounded and "[S9]" not in g.text

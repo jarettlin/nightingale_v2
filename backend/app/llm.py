@@ -49,6 +49,8 @@ class OpenAIClient:
                 model=self.model,
                 messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
                 response_format={"type": "json_object"} if json_mode else None,
+                # Judgements the server parses (risk, extraction) should be repeatable
+                temperature=0 if json_mode else None,
                 timeout=timeout_s,
             )
         except self._openai.OpenAIError as exc:

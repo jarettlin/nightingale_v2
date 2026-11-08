@@ -2,8 +2,10 @@
 to phrase things, not to be right about the clinic.
 
 Each sentence of the reply is kept only if it is supported:
-  * its [S#] markers must refer to sources we actually sent (fake ones removed)
-  * every number in it (prices, days, hours) must appear in a cited source
+  * its [S#] markers must refer to sources we actually sent (fake ones removed);
+    models also write [S2,S3], which counts as two markers
+  * every number in it (prices, days, hours) must appear in a cited source,
+    or in what the patient said ("since you're 38" echoes them, it isn't a claim)
   * enough of its content words must appear in the cited source(s)
   * a sentence with no marker survives only if it's plainly conversational
     ("Happy to help!") or clearly drawn from one of the sources
@@ -16,7 +18,8 @@ from dataclasses import dataclass, field
 
 from app.knowledge import Chunk, tokens
 
-MARKER = re.compile(r"\s*\[S(\d+)\]")
+# [S1], and the grouped forms models also produce: [S2,S3], [S2, S3]
+MARKER = re.compile(r"\s*\[(S\d+(?:\s*,\s*S?\d+)*)\]")
 NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
 CONVERSATIONAL = re.compile(
     r"^(thank|thanks|glad|happy to help|i hope|hope this|feel free|let me know|if you('d| would) like|"
@@ -38,7 +41,12 @@ class GroundedReply:
         return "high" if self.dropped == 0 else "med"
 
 
-LEADING_MARKERS = re.compile(r"^((?:\s*\[S\d+\])+)\s*")
+LEADING_MARKERS = re.compile(r"^((?:\s*\[S\d+(?:\s*,\s*S?\d+)*\])+)\s*")
+
+
+def _marker_numbers(sentence: str) -> list[str]:
+    """'…weeks. [S1] [S2,S3]' -> ['1', '2', '3']"""
+    return [n for group in MARKER.findall(sentence) for n in re.findall(r"\d+", group)]
 
 
 def _sentences(reply: str) -> list[str]:
@@ -90,11 +98,12 @@ def _polarity_ok(clause: str, source_sentences: list[str]) -> bool:
     return same > 0 and same >= opposite
 
 
-def _supported(claim: str, chunks: list[Chunk]) -> bool:
+def _supported(claim: str, chunks: list[Chunk], patient_numbers: frozenset[str] = frozenset()) -> bool:
     if not chunks:
         return False
-    # A price or a duration the sources don't contain is invented, however fluent
-    source_numbers = set().union(*(_numbers(c.text) for c in chunks))
+    # A price or a duration the sources don't contain is invented, however fluent.
+    # Numbers the patient gave (their age, how long) may be echoed back.
+    source_numbers = set().union(*(_numbers(c.text) for c in chunks)) | patient_numbers
     if not _numbers(claim) <= source_numbers:
         return False
     words = set(tokens(claim))
@@ -111,16 +120,18 @@ def _supported(claim: str, chunks: list[Chunk]) -> bool:
     return all(_polarity_ok(clause, source_sentences) for clause in CLAUSE_BREAK.split(claim) if clause.strip())
 
 
-def check_reply(reply: str, sources: list[Chunk]) -> GroundedReply:
+def check_reply(reply: str, sources: list[Chunk], patient_text: str = "") -> GroundedReply:
     by_marker = {str(n): chunk for n, chunk in enumerate(sources, 1)}
+    patient_numbers = frozenset(_numbers(patient_text))
     kept, used, dropped, cited_kept = [], {}, 0, 0
 
     for sentence in _sentences(reply):
-        markers = [m for m in MARKER.findall(sentence)]
-        claim = MARKER.sub("", sentence).strip()
+        markers = _marker_numbers(sentence)
+        # "next steps, [S2,S4]." minus its marker would leave "next steps,."
+        claim = re.sub(r"\s*,\s*([.!?])", r"\1", MARKER.sub("", sentence)).strip()
         valid = [m for m in dict.fromkeys(markers) if m in by_marker]
         if markers:
-            if valid and _supported(claim, [by_marker[m] for m in valid]):
+            if valid and _supported(claim, [by_marker[m] for m in valid], patient_numbers):
                 kept.append(claim + "".join(f" [S{m}]" for m in valid))
                 used.update({m: by_marker[m] for m in valid})
                 cited_kept += 1
@@ -128,7 +139,7 @@ def check_reply(reply: str, sources: list[Chunk]) -> GroundedReply:
                 dropped += 1
         elif CONVERSATIONAL.match(claim) and not _numbers(claim):
             kept.append(claim)
-        elif any(_supported(claim, [c]) for c in sources):
+        elif any(_supported(claim, [c], patient_numbers) for c in sources):
             kept.append(claim)
         else:
             dropped += 1
