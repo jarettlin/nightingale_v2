@@ -13,6 +13,7 @@ LIMITS = {
     "guest_message": [(10, 60), (100, 86_400)],
     "patient_message": [(30, 60), (500, 86_400)],
     "session_create": [(10, 3_600)],
+    "summary_email": [(3, 3_600)],      # emails go to addresses we can't verify yet: keep it small
 }
 
 

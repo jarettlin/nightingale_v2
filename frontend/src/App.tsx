@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ContinueSecurely } from './components/ContinueSecurely'
 import { MessageBubble } from './components/MessageBubble'
 import { ProfileDrawer, profileCount } from './components/ProfileDrawer'
+import { ValueSheet } from './components/ValueSheet'
 import { api, ApiError, type ChatMessage, type ClinicInfo, type Profile } from './lib/api'
 import { ensureUser, supabase } from './lib/supabase'
 import { store } from './lib/util'
@@ -33,6 +34,9 @@ export default function App() {
   const [sheetOpen, setSheetOpen] = useState(false)
   const [fatal, setFatal] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [stat, setStat] = useState<string | null>(null)
+  const [hadValue, setHadValue] = useState(false)
+  const [valueSheet, setValueSheet] = useState<'note' | 'email' | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
 
   const startNewSession = useCallback(async () => {
@@ -41,6 +45,7 @@ export default function App() {
     setSessionId(created.session.id)
     // The greeting comes from channel_rules.yaml on the server, and is stored as the first message
     setMessages([{ id: created.greeting.id, sender: 'assistant', text: created.greeting.text }])
+    setStat(created.stat.text)
   }, [])
 
   // Boot: sign in (anonymously if needed), then resume the last conversation or start one.
@@ -108,7 +113,7 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { setSheetOpen(false); setDrawerOpen(false) }
+      if (e.key === 'Escape') { setSheetOpen(false); setDrawerOpen(false); setValueSheet(null) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -132,6 +137,7 @@ export default function App() {
       setProfile(r.profile)
       setHighRisk((h) => h || r.risk_level === 'high')
       if (r.conversion_offer) setOffer(r.conversion_offer)
+      if (r.reply.citations.length) setHadValue(true)   // a real, cited answer: now offer the extras
     } catch (err) {
       const msg = err instanceof ApiError && err.status === 429
         ? 'You\'re sending messages quickly. Please wait a moment.'
@@ -210,13 +216,20 @@ export default function App() {
       <main className="thread" aria-live="polite">
         {notice && <MessageBubble message={{ id: 'notice', sender: 'system', text: notice }} />}
         {clinic && fallbackGreeting && <MessageBubble message={fallbackGreeting} />}
-        {messages.map((m) => (
+        {messages.map((m, i) => (
           <div key={m.id} id={`m-${m.id}`}>
             <MessageBubble message={m} sending={escalating}
                            onSendToClinic={m === lastAssistant ? sendToClinic : undefined} />
+            {i === 0 && stat && <p className="stat">{stat}</p>}
           </div>
         ))}
         {busy && <div className="row row-assistant"><div className="bubble bubble-assistant typing"><span /><span /><span /></div></div>}
+        {hadValue && !busy && (
+          <div className="value-actions">
+            <button type="button" onClick={() => setValueSheet('note')}>✍️ Make a note to share</button>
+            <button type="button" onClick={() => setValueSheet('email')}>✉️ Email me a summary</button>
+          </div>
+        )}
         <div ref={endRef} />
       </main>
 
@@ -239,6 +252,7 @@ export default function App() {
       <p className="emergency-note">{clinic?.emergency_notice ?? 'If this is an emergency, exit Nightingale and dial 999 for Emergency Services.'}</p>
 
       <ProfileDrawer profile={profile} open={drawerOpen} onClose={() => setDrawerOpen(false)} onJumpTo={jumpTo} />
+      {sessionId && <ValueSheet kind={valueSheet} sessionId={sessionId} onClose={() => setValueSheet(null)} />}
       {clinic && sessionId && (
         <ContinueSecurely open={sheetOpen} sessionId={sessionId} clinic={clinic} profile={profile}
                           isAnonymous={isAnonymous} converted={converted} onClose={() => setSheetOpen(false)}

@@ -31,6 +31,8 @@ from app.acquisition import (IntakeError, LinkError, OutboxSender, ReplySender, 
 from app.auth import AuthError, AuthUnavailable, Principal, TokenVerifier, resolve_principal
 from app.channels import opening
 from app.leads import funnel, warm_leads
+from app.value import (EmailSender, NotEnoughContext, OutboxEmailSender, ValueError_, email_summary, live_stat,
+                       share_note)
 from app.config import ClinicConfig
 from app.conversion import (ConsentChoices, ConversionError, SignupDetails, conversion_offer, convert,
                             current_consent, start_auth, update_consent)
@@ -70,6 +72,7 @@ class Deps:
     meta_verify_token: str = ""        # answers Meta's subscription handshake
     lead_form_secret: str = ""         # shared secret header for the lead-form webhook
     sender: ReplySender = field(default_factory=OutboxSender)
+    email_sender: EmailSender = field(default_factory=OutboxEmailSender)
     clock: Callable[[], datetime] = utcnow
 
 
@@ -91,6 +94,11 @@ class Convert(BaseModel):
     data_sharing: bool
     marketing: bool = False
     exclude_memory_ids: list[str] = []
+
+
+class SummaryRequest(BaseModel):
+    email: str = Field(max_length=254)
+    marketing_consent: bool = False      # a separate, unticked-by-default checkbox
 
 
 class Claim(BaseModel):
@@ -256,10 +264,35 @@ def create_app(deps: Deps) -> FastAPI:
             guest_auth_user_id=None if who.patient_id else who.auth_user_id,
             patient_id=who.patient_id, converted_at=now() if who.patient_id else None)
         greeting, skip = start_conversation(repo, deps.cipher, session, deps.clinic, deps.clock())
+        stat = live_stat(repo, deps.clinic, deps.clock())
         return {"session": {"id": session.id, "source_channel": session.source_channel,
                             "campaign_id": session.campaign_id, "stage": session.stage},
                 "greeting": {"id": greeting.id, "text": deps.cipher.decrypt(greeting.content_encrypted)},
+                "stat": {"text": stat.text, "kind": stat.kind, "value": stat.value},
                 "skip": skip, "emergency_notice": emergency}
+
+    @app.post("/sessions/{session_id}/share-note")
+    def make_share_note(session_id: str, who: Principal = Depends(principal), repo: Repository = Depends(get_repo)):
+        """A 240-character note they can send a friend or post: unbranded, nothing personal."""
+        session = owned_session(repo, who, session_id)
+        try:
+            note = share_note(repo, session)
+        except NotEnoughContext:
+            raise HTTPException(409, "Tell me a little about what you're looking into first, and I'll write one.")
+        return {"text": note.text, "chars": len(note.text), "topic": note.topic,
+                "source": {"title": note.source.title, "heading": note.source.heading, "excerpt": note.source.text}}
+
+    @app.post("/sessions/{session_id}/email-summary")
+    def send_summary(session_id: str, body: SummaryRequest, who: Principal = Depends(principal),
+                     repo: Repository = Depends(get_repo)):
+        """The earned email: a summary plus questions to ask, sent once because they asked."""
+        session = owned_session(repo, who, session_id)
+        deps.limiter.check("summary_email", who.auth_user_id)
+        try:
+            subject = email_summary(repo, session, body.email, body.marketing_consent, deps.clinic, deps.email_sender)
+        except ValueError_ as exc:
+            raise HTTPException(422, str(exc))
+        return {"sent": True, "subject": subject}
 
     @app.post("/sessions/claim")
     def claim(body: Claim, who: Principal = Depends(principal), repo: Repository = Depends(get_repo)):

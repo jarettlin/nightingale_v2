@@ -81,7 +81,13 @@ export const api = {
   clinic: () => request<ClinicInfo>('GET', '/clinic'),
   createSession: (params: { source?: string; campaign?: string; creative?: string; landing_page?: string }) =>
     request<{ session: { id: string; source_channel: string }; greeting: { id: string; text: string };
+      stat: { text: string; kind: 'count' | 'alternative'; value: number | null };
       skip: string[]; emergency_notice: string }>('POST', '/sessions', params),
+  shareNote: (sid: string) =>
+    request<{ text: string; chars: number; topic: string; source: { title: string; heading: string; excerpt: string } }>(
+      'POST', `/sessions/${sid}/share-note`),
+  emailSummary: (sid: string, email: string, marketing_consent: boolean) =>
+    request<{ sent: boolean; subject: string }>('POST', `/sessions/${sid}/email-summary`, { email, marketing_consent }),
   claim: (token: string) =>
     request<{ session: { id: string; source_channel: string }; skip: string[] }>('POST', '/sessions/claim', { token }),
   messages: (sid: string) => request<{ messages: ChatMessage[] }>('GET', `/sessions/${sid}/messages`),

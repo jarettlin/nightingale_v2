@@ -133,6 +133,15 @@ class SupabaseRepo:
                 order by landing_timestamp desc""", (clinic_id, since)).fetchall()
         return [LeadSession(**_str(r)) for r in rows]
 
+    def people_who_asked(self, clinic_id: str, since: str) -> int:
+        row = self.conn.execute(
+            """select count(distinct coalesce(l.patient_id::text, l.guest_auth_user_id::text)) as n
+               from public.funnel_event f join public.lead_session l on l.id = f.lead_session_id
+               where f.clinic_id = %s and f.event = 'conversation_started' and f.created_at >= %s
+                 and coalesce(l.patient_id::text, l.guest_auth_user_id::text) is not null""",
+            (clinic_id, since)).fetchone()
+        return int(row["n"])
+
     def funnel_rows(self, clinic_id: str, since: str) -> list[dict]:
         rows = self.conn.execute(
             """select lead_session_id, source_channel, event, value_kind, created_at from public.funnel_event

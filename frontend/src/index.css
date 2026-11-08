@@ -251,3 +251,15 @@ input, textarea { font: inherit; color: inherit; }
 .status-stopped, .status-resolved, .status-denied { background: var(--line); color: var(--muted); }
 
 .fatal { padding: 32px 20px; text-align: center; }
+
+/* ------------------------------------------------------------ value events */
+.stat { margin: 6px 4px 0; font-size: 13px; color: var(--muted); }
+.value-actions { display: flex; gap: 8px; flex-wrap: wrap; padding: 4px 0; }
+.value-actions button {
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  border-radius: 999px; padding: 7px 12px; font-size: 14px;
+}
+.note {
+  margin: 10px 0; padding: 12px 14px; border-left: 3px solid var(--brand);
+  background: var(--brand-soft); border-radius: 10px; font-size: 15.5px;
+}

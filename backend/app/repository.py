@@ -162,6 +162,7 @@ class Repository(Protocol):
     def recent_session_for_handle(self, platform: str, handle: str, since: str) -> LeadSession | None: ...
     def lead_sessions(self, clinic_id: str, since: str) -> list[LeadSession]: ...
     def funnel_rows(self, clinic_id: str, since: str) -> list[dict]: ...
+    def people_who_asked(self, clinic_id: str, since: str) -> int: ...
     def get_lead_session(self, lead_session_id: str) -> LeadSession | None: ...
     def advance_stage(self, lead_session_id: str, stage: str) -> None: ...
     def set_lead_contact(self, contact: LeadContact) -> None: ...
@@ -373,6 +374,15 @@ class InMemoryRepo:
 
     def funnel_rows(self, clinic_id: str, since: str) -> list[dict]:
         return [e for e in self.funnel_events if e["clinic_id"] == clinic_id and e["created_at"] >= since]
+
+    def people_who_asked(self, clinic_id: str, since: str) -> int:
+        """Distinct people (patient record, else guest account) who started a conversation since `since`."""
+        people = set()
+        for e in self.funnel_rows(clinic_id, since):
+            s = self.sessions.get(e["lead_session_id"])
+            if e["event"] == "conversation_started" and s and (s.patient_id or s.guest_auth_user_id):
+                people.add(s.patient_id or s.guest_auth_user_id)
+        return len(people)
 
     def get_lead_session(self, lead_session_id: str) -> LeadSession | None:
         return self.sessions.get(lead_session_id)

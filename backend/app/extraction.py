@@ -45,6 +45,9 @@ SYMPTOM_FORMS = {
     "bloated": "bloating", "dizzy": "dizziness", "nauseous": "nausea", "nauseated": "nausea",
     "headaches": "headache", "migraines": "migraine", "cramp": "cramps", "bleed": "bleeding",
     "bled": "bleeding", "exhausted": "fatigue", "can't sleep": "insomnia", "anxious": "anxiety",
+    "periods are irregular": "irregular periods", "period is irregular": "irregular periods",
+    "cycles are irregular": "irregular periods", "cycle is irregular": "irregular periods",
+    "irregular cycles": "irregular periods", "irregular cycle": "irregular periods",
 }
 GOALS = {
     "egg freezing": "egg freezing", "freeze my eggs": "egg freezing", "ivf": "IVF",

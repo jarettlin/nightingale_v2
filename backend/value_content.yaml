@@ -1,0 +1,56 @@
+# Clinic-written content for value events. Synthetic demo content.
+#
+# Each topic has questions people often forget to ask a doctor. The shareable note
+# uses one; the earned email uses six (topped up from `general` if a topic has fewer).
+# Keys are matched against what the person asked about (see app/value.py).
+
+topics:
+  egg freezing:
+    kb_query: how does egg freezing work and how long does it take
+    questions:
+      - How many eggs would you expect to collect for someone my age?
+      - How many cycles might I need?
+      - What are the yearly storage costs, and for how long can eggs be stored?
+      - What happens to my eggs if I move or change clinics?
+      - What side effects should I watch for during the injections?
+  IVF:
+    kb_query: how does IVF work
+    questions:
+      - What are the realistic chances of success for someone like me?
+      - How many embryos would you suggest transferring, and why?
+      - What tests do you recommend before starting?
+      - What is included in the quoted price, and what costs extra?
+  IUI:
+    kb_query: what is IUI
+    questions:
+      - Is IUI or IVF more suitable for me, and why?
+      - How many IUI cycles would you try before changing approach?
+      - Will I need medication with IUI?
+  fertility testing:
+    kb_query: what is an AMH test
+    questions:
+      - Which tests do you recommend for me, and what will each one tell us?
+      - What does my AMH result mean for my options?
+      - Should my partner be tested too?
+  irregular periods:
+    kb_query: irregular periods when to talk to a doctor
+    questions:
+      - What could be causing my cycles to be irregular?
+      - Which tests would help find out why?
+      - How might irregular cycles affect my chances of getting pregnant?
+  trying to conceive:
+    kb_query: when do people usually seek fertility testing
+    questions:
+      - Given how long we've been trying, which tests would you start with?
+      - Is there anything we should change in the meantime?
+      - When would you suggest moving to treatment?
+
+general:
+  - What would you recommend as the next step for me, and why?
+  - What are the costs, and what does each cost include?
+  - How soon could I start, and how long does it usually take?
+  - Who do I contact if I have questions between appointments?
+  - What can I do now to prepare?
+  - Are there other options I should know about?
+
+kudos: Well done for looking into it now rather than waiting.
