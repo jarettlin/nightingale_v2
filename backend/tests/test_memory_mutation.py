@@ -191,6 +191,22 @@ def test_known_medication_keeps_its_duration():
     assert (op["value"], op["detail"]) == ("Clomid", {"since": "2 months"})
 
 
+@pytest.mark.parametrize("text, symptoms", [
+    ("really bloated since the egg retrieval and I feel dizzy", {"bloating", "dizziness"}),
+    ("I'm pregnant and bleeding heavily with cramps", {"bleeding", "cramps"}),
+])
+def test_everyday_symptom_words_are_recognised(text, symptoms):
+    found = {op["value"] for op in rule_extract(text, []).operations if op["kind"] in ("symptom", "chief_complaint")}
+    assert symptoms <= found
+
+
+def test_a_duration_attaches_only_to_what_it_describes():
+    ops = rule_extract("I've had irregular periods for 6 months, I take metformin", []).operations
+    by_value = {op["value"]: op for op in ops}
+    assert by_value["irregular periods"]["detail"] == {"onset": "6 months"}
+    assert by_value["Metformin"]["detail"] == {}
+
+
 def test_stopping_an_unknown_medication_does_not_add_it_as_active():
     ops = rule_extract("I stopped Advil a month ago", []).operations
     assert not any(op.get("status") == "active" and op.get("kind") == "medication" for op in ops)

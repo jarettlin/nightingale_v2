@@ -60,6 +60,17 @@ def test_full_journey(api, repo):
     assert thread[-1]["sender"] == "clinician"
 
 
+def test_patient_on_a_new_device_finds_their_conversation(api):
+    guest = make_token("user-9", anonymous=True)
+    sid = api.post("/sessions", json={"source": "instagram"}, headers=bearer(guest)).json()["session"]["id"]
+    api.post(f"/sessions/{sid}/messages", json={"text": "how much does egg freezing cost?"}, headers=bearer(guest))
+    patient = make_token("user-9", email="nine@example.com")
+    api.post(f"/sessions/{sid}/convert", json={"phone": "+60123456789", "data_sharing": True}, headers=bearer(patient))
+
+    assert api.get("/me/sessions", headers=bearer(patient)).json()["sessions"][0]["id"] == sid
+    assert api.get("/me/sessions", headers=bearer(make_token("someone", anonymous=True))).json()["sessions"] == []
+
+
 def test_guest_messages_are_rate_limited(api):
     sid = api.post("/sessions", json={}, headers=bearer(GUEST)).json()["session"]["id"]
     codes = [api.post(f"/sessions/{sid}/messages", json={"text": "hi"}, headers=bearer(GUEST)).status_code

@@ -110,6 +110,12 @@ def test_role_cannot_be_claimed_in_the_token(api, world):
     assert api.get("/staff/escalations", headers=bearer(sneaky)).status_code == 403
 
 
+def test_staff_me_reports_role_for_the_ui_only(api, world):
+    assert api.get("/staff/me", headers=bearer(NURSE)).json() == {"role": "nurse", "clinical": True}
+    assert api.get("/staff/me", headers=bearer(FRONT_DESK)).json() == {"role": "staff", "clinical": False}
+    assert api.get("/staff/me", headers=bearer(PATIENT_A)).status_code == 403
+
+
 def test_front_desk_cannot_send_clinical_replies(api, world):
     escalation = api.post(f"/sessions/{world['a']}/escalations", json={}, headers=bearer(PATIENT_A)).json()
     r = api.post(f"/staff/escalations/{escalation['escalation_id']}/responses", json={"body": "hi"},

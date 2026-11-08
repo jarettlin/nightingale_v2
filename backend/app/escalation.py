@@ -97,9 +97,9 @@ def build_triage_summary(trigger: StoredMessage, prof: dict, attribution: dict) 
         if bullet := _fact_bullet(label, items):
             bullets.append(bullet)
     asks = [i.replace("_", " ") for i in (trigger.intents or []) if i in ("wants_diagnosis", "medication_change")]
-    context = f"Came via {attribution['source_channel']}"
+    context = f"Came via {attribution['source_channel'].replace('_', ' ')}"
     if attribution.get("referral_topic"):
-        context += f", staff referral: {attribution['referral_topic']}"
+        context = f"Came via staff referral: {attribution['referral_topic']}"
     elif attribution.get("campaign_id"):
         context += f", campaign {attribution['campaign_id']}"
     if asks:

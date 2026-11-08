@@ -38,8 +38,14 @@ SYMPTOMS = [
     "headache", "migraine", "nausea", "vomiting", "cramps", "cramping", "bloating", "spotting",
     "fatigue", "tiredness", "dizziness", "hot flashes", "back pain", "pelvic pain", "abdominal pain",
     "irregular periods", "missed period", "heavy periods", "painful periods", "acne", "hair loss",
-    "insomnia", "anxiety", "low mood", "breast tenderness",
+    "insomnia", "anxiety", "low mood", "breast tenderness", "bleeding",
 ]
+# Everyday word forms -> the symptom they mean ("I feel dizzy" is dizziness)
+SYMPTOM_FORMS = {
+    "bloated": "bloating", "dizzy": "dizziness", "nauseous": "nausea", "nauseated": "nausea",
+    "headaches": "headache", "migraines": "migraine", "cramp": "cramps", "bleed": "bleeding",
+    "bled": "bleeding", "exhausted": "fatigue", "can't sleep": "insomnia", "anxious": "anxiety",
+}
 GOALS = {
     "egg freezing": "egg freezing", "freeze my eggs": "egg freezing", "ivf": "IVF",
     "trying to conceive": "trying to conceive", "get pregnant": "trying to conceive",
@@ -81,6 +87,9 @@ def rule_extract(text: str, current: list[MemoryItem]) -> Extraction:
     clarify = None
     meds_named = _find_terms(text, MEDICATIONS)
     symptoms_named = _find_terms(text, SYMPTOMS)
+    for form in _find_terms(text, SYMPTOM_FORMS):
+        if SYMPTOM_FORMS[form] not in symptoms_named:
+            symptoms_named.append(SYMPTOM_FORMS[form])
     when = re.search(TIME, text, re.I)
     since = re.search(DURATION, text, re.I)
 
@@ -128,7 +137,10 @@ def rule_extract(text: str, current: list[MemoryItem]) -> Extraction:
     # New medications: known names only. Free text after "I'm on…" turns
     # "my period" or "holiday" into drugs; unfamiliar drug names are the LLM's job.
     for med in meds_named:
-        detail = {"since": since.group(1)} if since else {}
+        # Only a duration right after the medicine is about it: "on Clomid for 2 months",
+        # not "irregular periods for 6 months, I take metformin"
+        own = re.search(rf"\b{re.escape(med)}\b[^.,;]{{0,15}}?\b{DURATION}", text, re.I)
+        detail = {"since": own.group(1)} if own else {}
         ops.append({"op": "add", "kind": "medication", "value": med.title(), "status": "active", "detail": detail})
 
     # Allergies

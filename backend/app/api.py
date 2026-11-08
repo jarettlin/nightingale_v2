@@ -26,8 +26,8 @@ from app.auth import AuthError, AuthUnavailable, Principal, TokenVerifier, resol
 from app.config import ClinicConfig
 from app.conversion import ConsentChoices, ConversionError, SignupDetails, conversion_offer, convert, start_auth
 from app.crypto import Cipher
-from app.escalation import (EscalationError, NeedsAccount, NeedsConsent, move, respond, review_packet,
-                            send_to_clinic)
+from app.escalation import (CLINICAL_ROLES, EscalationError, NeedsAccount, NeedsConsent, move, respond,
+                            review_packet, send_to_clinic)
 from app.llm import SafeLLM
 from app.memory import profile
 from app.pipeline import SessionExpired, SessionNotFound, handle_patient_message
@@ -265,6 +265,16 @@ def create_app(deps: Deps) -> FastAPI:
         return {"escalation_id": e.id, "status": e.status, "already_open": result.already_open,
                 "response_due_at": e.response_due_at, "confirmation": result.confirmation}
 
+    @app.get("/me/sessions")
+    def my_sessions(who: Principal = Depends(principal), repo: Repository = Depends(get_repo)):
+        """A signed-in patient on a new device picks up their latest conversation
+        instead of an empty one (guests resume via the id stored on their device)."""
+        if not who.patient_id:
+            return {"sessions": []}
+        sessions = sorted(repo.sessions_for_patient(who.patient_id), key=lambda s: s.landing_timestamp, reverse=True)
+        return {"sessions": [{"id": s.id, "source_channel": s.source_channel, "landing_timestamp": s.landing_timestamp}
+                             for s in sessions]}
+
     @app.get("/me/escalations")
     def my_escalations(who: Principal = Depends(principal), repo: Repository = Depends(get_repo)):
         if not who.patient_id:
@@ -278,6 +288,11 @@ def create_app(deps: Deps) -> FastAPI:
         return {"escalations": out}
 
     # -------------------------------------------------------------- staff
+
+    @app.get("/staff/me")
+    def staff_me(who: Principal = Depends(staff_only)):
+        # For the UI only (hide what a role can't do); every action is still checked server-side
+        return {"role": who.staff.role, "clinical": who.staff.role in CLINICAL_ROLES}
 
     @app.get("/staff/escalations")
     def queue(who: Principal = Depends(staff_only), repo: Repository = Depends(get_repo)):

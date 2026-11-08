@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { devToken } from './dev'
 
 // Publishable key only: everything it can reach is limited by RLS.
 export const supabase = createClient(
@@ -20,6 +21,8 @@ async function signIn() {
 /** A signed-in user, anonymous if needed: guests get value before any sign-up.
  *  Shared promise, so two callers at once can't create two anonymous users. */
 export function ensureUser() {
+  // Dev-build demo sign-in: no Supabase session needed (see lib/dev.ts)
+  if (devToken()) return Promise.resolve({ user: { is_anonymous: false } } as Awaited<ReturnType<typeof signIn>>)
   pending ??= signIn().finally(() => { pending = null })
   return pending
 }

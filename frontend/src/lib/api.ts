@@ -1,3 +1,4 @@
+import { devToken } from './dev'
 import { supabase } from './supabase'
 
 const BASE = (import.meta.env.VITE_API_URL as string) || '/api'
@@ -61,9 +62,14 @@ export class ApiError extends Error {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const { data } = await supabase.auth.getSession()
   const headers: Record<string, string> = { 'content-type': 'application/json' }
-  if (data.session) headers.authorization = `Bearer ${data.session.access_token}`
+  const dev = devToken()
+  if (dev) {
+    headers.authorization = `Bearer ${dev}`
+  } else {
+    const { data } = await supabase.auth.getSession()
+    if (data.session) headers.authorization = `Bearer ${data.session.access_token}`
+  }
   const res = await fetch(`${BASE}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined })
   if (res.status === 204) return undefined as T
   const json = await res.json().catch(() => ({}))
@@ -77,6 +83,7 @@ export const api = {
     request<{ session: { id: string; source_channel: string }; greeting: string; emergency_notice: string }>(
       'POST', '/sessions', params),
   messages: (sid: string) => request<{ messages: ChatMessage[] }>('GET', `/sessions/${sid}/messages`),
+  mySessions: () => request<{ sessions: { id: string; source_channel: string }[] }>('GET', '/me/sessions'),
   profile: (sid: string) => request<{ profile: Profile }>('GET', `/sessions/${sid}/profile`),
   send: (sid: string, text: string) => request<MessageResponse>('POST', `/sessions/${sid}/messages`, { text }),
   authStarted: (sid: string) => request<void>('POST', `/sessions/${sid}/auth-started`),
@@ -85,4 +92,55 @@ export const api = {
   escalate: (sid: string) =>
     request<{ escalation_id: string; confirmation: string; already_open: boolean; response_due_at: string }>(
       'POST', `/sessions/${sid}/escalations`, {}),
+
+  // ---- staff
+  staffMe: () => request<{ role: string; clinical: boolean }>('GET', '/staff/me'),
+  queue: () => request<{ escalations: QueueItem[] }>('GET', '/staff/escalations'),
+  review: (id: string) => request<ReviewPacket>('GET', `/staff/escalations/${id}`),
+  setStatus: (id: string, status: string) =>
+    request<{ id: string; status: string }>('POST', `/staff/escalations/${id}/status`, { status }),
+  reply: (id: string, body: string) =>
+    request<{ id: string }>('POST', `/staff/escalations/${id}/responses`, { body, visible_to_patient: true }),
+  patients: () => request<{ patients: PatientSummary[] }>('GET', '/staff/patients'),
+  patientThread: (pid: string) =>
+    request<{ messages: (ChatMessage & { risk_level?: string; risk_reason?: string; sent_as: string })[] }>(
+      'GET', `/staff/patients/${pid}/messages`),
+}
+
+export type QueueItem = {
+  id: string
+  risk_level: 'low' | 'med' | 'high' | null
+  reason: string
+  status: string
+  created_at: string
+  response_due_at: string
+  summary: string[]
+}
+
+export type TriageBullet = { text: string; provenance_message_ids: string[] }
+export type SnapshotItem = ProfileItem & { kind: string }
+export type Source = { text: string; sent_as: string; created_at: string; risk_level: string | null }
+
+export type ReviewPacket = {
+  escalation: {
+    id: string
+    reason: string
+    risk_level: string | null
+    status: string
+    trigger_message_id: string
+    triage_summary: TriageBullet[]
+    profile_snapshot: SnapshotItem[]
+    attribution: Record<string, string | null>
+    response_due_at: string
+    created_at: string
+    assigned_to: string | null
+  }
+  sources: Record<string, Source>
+  responses: { author_id: string; created_at: string; text: string }[]
+}
+
+export type PatientSummary = {
+  patient_id: string
+  first_touch: Record<string, string | null> | null
+  profile: Profile
 }

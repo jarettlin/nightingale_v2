@@ -52,15 +52,20 @@ export default function App() {
         const session = await ensureUser()
         setIsAnonymous(session.user.is_anonymous ?? false)
         setClinic(await api.clinic())
-        const saved = store.get('session')
-        if (saved) {
+        // Resume, in order: the conversation saved on this device, then (for a signed-in
+        // patient on a new device) their latest one. Only start fresh if neither exists.
+        const mine = session.user.is_anonymous ? [] : (await api.mySessions()).sessions.map((s) => s.id)
+        if (mine.length) setConverted(true)
+        for (const candidate of [store.get('session'), ...mine]) {
+          if (!candidate) continue
           try {
-            const [thread, prof] = await Promise.all([api.messages(saved), api.profile(saved)])
-            setSessionId(saved)
+            const [thread, prof] = await Promise.all([api.messages(candidate), api.profile(candidate)])
+            store.set('session', candidate)
+            setSessionId(candidate)
             setMessages(thread.messages)
             setProfile(prof.profile)
             // Back from the email link: pick up the sign-up where they left off
-            if (!session.user.is_anonymous && store.get('pendingEmail')) setSheetOpen(true)
+            if (!session.user.is_anonymous && !mine.length && store.get('pendingEmail')) setSheetOpen(true)
             return
           } catch (err) {
             if (!(err instanceof ApiError) || ![404, 410].includes(err.status)) throw err
