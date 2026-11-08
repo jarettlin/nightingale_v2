@@ -25,10 +25,13 @@ class LLMUnavailable(Exception):
 # Calls whose answer the server parses, so the model must return a JSON object
 JSON_PURPOSES = {"risk", "extract", "verify"}
 
-# Per-attempt timeouts. Normal calls take ~1–1.5s; a stalled request is cut
-# short and retried once instead of making the patient wait 15s. Worst case is
-# about two attempts, then the safe fallback for that step.
-TIMEOUTS = {"risk": 5.0, "reply": 8.0, "extract": 6.0, "verify": 5.0}
+# Per-attempt timeouts. A stalled request is cut short and retried once instead
+# of making the patient wait. Measured on gpt-4.1-mini (2026-11-08): risk calls
+# take 0.9s median, 1.7s at worst over 30 real messages; the reply and claim
+# check about 0.8-1.4s. Each limit is roughly twice the slowest healthy call.
+# Seen live: a stalled risk call took 6.7s under the old 5s limit. Extraction
+# can be generous, because the reply never waits more than 1.5s for it.
+TIMEOUTS = {"risk": 3.0, "reply": 5.0, "extract": 6.0, "verify": 3.0}
 DEFAULT_TIMEOUT = 8.0
 
 

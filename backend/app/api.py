@@ -316,12 +316,12 @@ def create_app(deps: Deps) -> FastAPI:
         try:
             result = handle_patient_message(repo, deps.llm, deps.cipher, session.id, body.text,
                                             clinic=deps.clinic, extractor_llm=deps.extractor_llm,
-                                            known_identifiers=known)
+                                            known_identifiers=known, session=session)
         except SessionNotFound:
             raise HTTPException(404, "Not found")
         except SessionExpired:
             raise HTTPException(410, "This conversation has expired. Start a new one any time.")
-        session = repo.get_lead_session(session.id)
+        session = result.session
         return {
             "message_id": result.patient_message_id,
             "reply": {"id": result.assistant_message_id, "text": result.reply,

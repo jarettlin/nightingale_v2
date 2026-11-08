@@ -102,14 +102,15 @@ ratings flag where a lawyer should be consulted.
   find the injections painless" shares almost every word with its source and passes the rules, but the
   checker drops it. It kept every correct sentence across 5 repeats and 10 real questions, for 0.8–1.4 s
   extra per answer.
-- **Latency:** about 5.4 s per message end to end in the live app: roughly 3.1 s of model calls (risk,
-  reply, claim check) and roughly 2.3 s of database round trips. Fact extraction runs in parallel and may
-  hold a finished reply for at most 1.5 s; seen live, it stalled for 7.3 s and the reply went out anyway,
-  with the facts saved by the offline rules. The risk check is never skipped, so a stalled risk call
-  (6.7 s once, on the first call after a restart) still delays the reply. Before per-call timeouts, one
-  stalled call took 18 s.
-- **Tests:** 296 backend tests, including a Supabase round trip of every feature, plus 32 RLS checks on
-  PGlite.
+- **Latency:** about **3 s per message** end to end in the live app (3.0, 3.1 and 2.3 s measured), down
+  from 5.4 s. Database time per message went from 1.2 s to 0.34 s: memory is read once per request instead
+  of five times, the session isn't looked up twice, and the writes go out together in one batch (Postgres
+  pipeline mode) instead of seven sequential round trips of ~80 ms each. Model retry timeouts were set from
+  measurements (risk calls: 0.9 s median, 1.7 s slowest of 30), so a stalled call is retried after 3 s
+  instead of 5 s. Fact extraction runs in parallel and may hold a finished reply for at most 0.5 s; it
+  stalls for ~7 s on maybe 1 call in 4, and then the offline rules save the facts instead. The risk check is
+  never skipped, so a stalled risk call still delays the reply. Before per-call timeouts, one stalled call
+  took 18 s.
 
 ## 6. Trade-offs and what we cut
 

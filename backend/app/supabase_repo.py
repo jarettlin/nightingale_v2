@@ -50,8 +50,19 @@ def _str(row: dict) -> dict:
 
 
 class _DbMemory:
+    """One request's view of a person's memory. It is read from the database once
+    and then kept in step with this request's own appends: applying a few memory
+    operations used to re-read the whole history up to 5 times per message (each
+    a ~80ms round trip to Supabase)."""
+
     def __init__(self, conn: psycopg.Connection, lead_session_id: str):
         self._conn, self._session_id = conn, lead_session_id
+        self._items: list[MemoryItem] | None = None
+
+    def _loaded(self) -> list[MemoryItem]:
+        if self._items is None:
+            self._items = self._rows()
+        return self._items
 
     def _rows(self, where: str = "", params: tuple = ()) -> list[MemoryItem]:
         rows = self._conn.execute(
@@ -73,17 +84,19 @@ class _DbMemory:
             (self._session_id, item.id, item.kind, item.value, item.status, item.provenance_message_id,
              item.updated_at, Jsonb(item.detail), item.supersedes_id, item.conflict_with_id,
              item.extracted_by))
+        self._loaded().append(item)
         return item
 
     def all(self) -> list[MemoryItem]:
-        return self._rows()
+        return list(self._loaded())
 
     def get(self, item_id: str) -> MemoryItem | None:
-        rows = self._rows("and memory_item.id = %s", (item_id,))
-        return rows[0] if rows else None
+        return next((i for i in self._loaded() if i.id == item_id), None)
 
     def current(self) -> list[MemoryItem]:
-        return self._rows("and not exists (select 1 from public.memory_item n where n.supersedes_id = memory_item.id)")
+        # Same rule as the current_memory view: items nothing supersedes
+        superseded = {i.supersedes_id for i in self._loaded() if i.supersedes_id}
+        return [i for i in self._loaded() if i.id not in superseded]
 
 
 class SupabaseRepo:
@@ -293,11 +306,12 @@ class SupabaseRepo:
                 raise ValueError("session already belongs to another patient")
 
     def add_citations(self, message_id: str, citations: list) -> None:
-        for row in citation_rows(message_id, citations):
-            self.conn.execute(
+        rows = citation_rows(message_id, citations)
+        if rows:
+            self.conn.cursor().executemany(
                 """insert into public.citation (message_id, marker, source_doc, source_version, start_char, end_char)
                    values (%(message_id)s, %(marker)s, %(source_doc)s, %(source_version)s, %(start_char)s, %(end_char)s)""",
-                row)
+                rows)
 
     def citations_for(self, message_id: str) -> list[dict]:
         rows = self.conn.execute(
@@ -386,6 +400,14 @@ class SupabaseRepo:
                from public.clinician_response where escalation_id = %s order by created_at""",
             (escalation_id,)).fetchall()
         return [ClinicianResponse(**_str(r)) for r in rows]
+
+    @contextmanager
+    def batch(self):
+        """Send the writes inside this block without waiting for each one's answer
+        (Postgres pipeline mode). Same statements, same order, same transaction:
+        7 sequential round trips per message become about one."""
+        with self.conn.pipeline():
+            yield self
 
     @contextmanager
     def read_as(self, auth_user_id: str):

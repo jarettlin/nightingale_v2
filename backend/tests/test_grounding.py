@@ -204,7 +204,7 @@ import json  # noqa: E402
 
 from app.grounding import VERIFY_SYSTEM, verify_claims  # noqa: E402
 from app.intake import handle_turn  # noqa: E402
-from app.llm import FakeLLM  # noqa: E402
+from app.llm import TIMEOUTS, FakeLLM  # noqa: E402
 
 
 class Checker:
@@ -243,7 +243,7 @@ def test_a_reworded_outside_claim_passes_the_rules_but_not_the_checker():
     assert g.grounded and g.verified and g.dropped == 1 and g.confidence == "med"
     # Only factual sentences are checked, in strict JSON mode with its own short timeout
     [call] = checker.prompts
-    assert call["json_mode"] and call["timeout_s"] == 5.0
+    assert call["json_mode"] and call["timeout_s"] == TIMEOUTS["verify"]
     assert "1. Treatment usually" in call["user"] and "Happy to help" not in call["user"].split("STATEMENTS:")[1]
 
 
