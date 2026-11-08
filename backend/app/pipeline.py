@@ -47,6 +47,7 @@ class PipelineResult:
     reply: str
     risk: RiskAssessment
     show_send_to_clinic: bool
+    advice_generated: bool
     clarify: str | None
     profile: dict
     memory_rejections: list[str]
@@ -132,6 +133,7 @@ def handle_patient_message(repo: Repository, llm: SafeLLM, cipher: Cipher, lead_
         reply=reply,
         risk=risk,
         show_send_to_clinic=turn.show_send_to_clinic,
+        advice_generated=turn.advice_generated,
         clarify=extraction.clarify,
         profile=profile(store),
         memory_rejections=[r.reason for r in results if not r.applied],

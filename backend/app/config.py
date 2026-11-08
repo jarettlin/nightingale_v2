@@ -9,6 +9,7 @@ class ClinicConfig:
     name: str
     emergency_number: str  # 999 in Malaysia, 995 in Singapore: never hardcode it
     response_window: str
+    description: str = "a fertility clinic"
 
 
 DEFAULT_CLINIC = ClinicConfig(
@@ -16,4 +17,5 @@ DEFAULT_CLINIC = ClinicConfig(
     name="Sunrise Fertility Clinic",
     emergency_number="999",
     response_window="12 to 18 hours",
+    description="a fertility clinic in Kuala Lumpur",
 )

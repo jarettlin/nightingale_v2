@@ -69,6 +69,18 @@ def safety_reply(risk: RiskAssessment, clinic: ClinicConfig) -> str:
     )
 
 
+def trust_reply(clinic: ClinicConfig) -> str:
+    """Fixed wording, never generated: what the AI is, what the clinic is, when a human steps in."""
+    return (
+        f"No, I'm not a doctor or a nurse. I'm Nightingale, an AI assistant that {clinic.name}, "
+        f"{clinic.description}, uses to answer general questions and help you get your concern to their team. "
+        f"I can't diagnose, prescribe, or change your treatment. "
+        f"A real person gets involved when you tap Send to Clinic, or straight away if something you describe "
+        f"sounds urgent: a nurse at {clinic.name} reads your conversation and replies, usually within "
+        f"{clinic.response_window}. In an emergency, call {clinic.emergency_number}."
+    )
+
+
 def _llm_risk_opinion(llm: SafeLLM, text: str) -> dict:
     raw = llm.complete(RISK_SYSTEM, text, purpose="risk")
     try:
@@ -93,6 +105,8 @@ def handle_turn(text: str, llm: SafeLLM, clinic: ClinicConfig = DEFAULT_CLINIC,
 
     if risk.escalation_required:
         return TurnResult(safety_reply(risk, clinic), risk, show_send_to_clinic=True, advice_generated=False)
+    if "identity_question" in risk.intents:
+        return TurnResult(trust_reply(clinic), risk, show_send_to_clinic=True, advice_generated=False)
 
     try:
         reply = llm.complete(REPLY_SYSTEM.format(clinic=clinic.name), text, purpose="reply",

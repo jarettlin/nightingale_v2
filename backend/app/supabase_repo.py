@@ -10,6 +10,7 @@ the API, and a rolled-back one in the integration test.
 
 import json
 import os
+import uuid
 from contextlib import contextmanager
 
 import psycopg
@@ -101,13 +102,14 @@ class SupabaseRepo:
         return session
 
     def get_lead_session(self, lead_session_id: str) -> LeadSession | None:
+        # Check the shape in Python: a SQL cast error would abort the request's transaction
         try:
-            row = self.conn.execute(
-                f"select {', '.join(LEAD_FIELDS)} from public.lead_session where id = %s",
-                (lead_session_id,)).fetchone()
-        except psycopg.errors.InvalidTextRepresentation:  # not a uuid
-            self.conn.rollback()
+            uuid.UUID(lead_session_id)
+        except ValueError:
             return None
+        row = self.conn.execute(
+            f"select {', '.join(LEAD_FIELDS)} from public.lead_session where id = %s",
+            (lead_session_id,)).fetchone()
         return LeadSession(**_str(row)) if row else None
 
     def advance_stage(self, lead_session_id: str, stage: str) -> None:
@@ -236,6 +238,31 @@ class SupabaseRepo:
                                          (lead_session_id,)).fetchone()
             if existing is None or str(existing["patient_id"]) != patient_id:
                 raise ValueError("session already belongs to another patient")
+
+    def find_staff_by_auth_user(self, auth_user_id: str):
+        from app.escalation import Staff
+        row = self.conn.execute("select id, clinic_id, role from public.staff_member where auth_user_id = %s",
+                                (auth_user_id,)).fetchone()
+        return Staff(**_str(row)) if row else None
+
+    def get_patient(self, patient_id: str) -> dict | None:
+        row = self.conn.execute("select id, clinic_id, auth_user_id from public.patient where id = %s",
+                                (patient_id,)).fetchone()
+        return _str(row) if row else None
+
+    def list_patients(self, clinic_id: str) -> list[str]:
+        rows = self.conn.execute("select id from public.patient where clinic_id = %s order by created_at",
+                                 (clinic_id,)).fetchall()
+        return [str(r["id"]) for r in rows]
+
+    def sessions_for_patient(self, patient_id: str) -> list[LeadSession]:
+        rows = self.conn.execute(
+            f"select {', '.join(LEAD_FIELDS)} from public.lead_session where patient_id = %s order by created_at",
+            (patient_id,)).fetchall()
+        return [LeadSession(**_str(r)) for r in rows]
+
+    def escalations_for_patient(self, patient_id: str) -> list[Escalation]:
+        return self._escalations("patient_id = %s order by created_at", (patient_id,))
 
     def add_escalation(self, escalation: Escalation) -> Escalation:
         values = {f: getattr(escalation, f) for f in ESCALATION_FIELDS}

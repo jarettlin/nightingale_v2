@@ -43,6 +43,45 @@ def llm(model):
     return SafeLLM(model)
 
 
+TEST_JWT_SECRET = "test-secret-at-least-32-bytes-long!!"
+
+
+def make_token(sub: str, anonymous: bool = False, email: str | None = None, minutes: int = 60) -> str:
+    """A token shaped like Supabase's access tokens, signed with the test secret."""
+    import time
+
+    import jwt
+    claims = {"sub": sub, "aud": "authenticated", "role": "authenticated",
+              "exp": int(time.time()) + minutes * 60, "is_anonymous": anonymous}
+    if email:
+        claims["email"] = email
+    return jwt.encode(claims, TEST_JWT_SECRET, algorithm="HS256")
+
+
+def bearer(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def api(repo, cipher, llm):
+    from contextlib import contextmanager
+
+    from fastapi.testclient import TestClient
+
+    from app.api import Deps, create_app
+    from app.auth import TokenVerifier
+    from app.config import DEFAULT_CLINIC
+    from app.ratelimit import RateLimiter
+
+    @contextmanager
+    def scope():
+        yield repo
+
+    deps = Deps(repo_scope=scope, cipher=cipher, llm=llm, verifier=TokenVerifier(jwt_secret=TEST_JWT_SECRET),
+                clinic=DEFAULT_CLINIC, limiter=RateLimiter())
+    return TestClient(create_app(deps))
+
+
 @pytest.fixture
 def guest_session(repo):
     return repo.create_lead_session(clinic_id="clinic_demo", source_channel="instagram_ad_click",

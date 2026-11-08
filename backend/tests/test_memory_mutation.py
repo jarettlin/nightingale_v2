@@ -70,7 +70,8 @@ def test_allergies_and_goal():
     store = InMemoryStore()
     turn(store, "I'm interested in egg freezing. I'm allergic to penicillin.", "msg_1")
     p = profile(store)
-    assert p["chief_complaint"][0]["value"] == "egg freezing"
+    assert p["goal"][0]["value"] == "egg freezing"
+    assert "chief_complaint" not in p  # a service they want isn't a complaint
     assert p["allergy"][0]["value"] == "penicillin"
 
 

@@ -137,7 +137,8 @@ def rule_extract(text: str, current: list[MemoryItem]) -> Extraction:
     for m in ALLERGY.finditer(text):
         ops.append({"op": "add", "kind": "allergy", "value": m.group("x").strip().lower(), "status": "active"})
 
-    # Symptoms; the first concern we hear becomes the chief complaint
+    # Symptoms; the first one we hear becomes the chief complaint. Services they
+    # ask about ("how much is egg freezing?") are goals, never complaints.
     has_chief = bool(_current(current, "chief_complaint"))
     for i, symptom in enumerate(symptoms_named):
         detail = {"onset": since.group(1)} if since else {}
@@ -147,9 +148,7 @@ def rule_extract(text: str, current: list[MemoryItem]) -> Extraction:
 
     for phrase, goal in GOALS.items():
         if re.search(rf"\b{re.escape(phrase)}\b", text, re.I):
-            kind = "goal" if has_chief else "chief_complaint"
-            ops.append({"op": "add", "kind": kind, "value": goal, "status": "active"})
-            has_chief = True
+            ops.append({"op": "add", "kind": "goal", "value": goal, "status": "active"})
             break
 
     return Extraction(ops, clarify)

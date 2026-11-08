@@ -133,6 +133,11 @@ class ClinicianResponse:
 
 
 class Repository(Protocol):
+    def find_staff_by_auth_user(self, auth_user_id: str): ...
+    def get_patient(self, patient_id: str) -> dict | None: ...
+    def list_patients(self, clinic_id: str) -> list[str]: ...
+    def sessions_for_patient(self, patient_id: str) -> list[LeadSession]: ...
+    def escalations_for_patient(self, patient_id: str) -> list[Escalation]: ...
     def add_escalation(self, escalation: Escalation) -> Escalation: ...
     def get_escalation(self, escalation_id: str) -> Escalation | None: ...
     def open_escalation_for_patient(self, patient_id: str) -> Escalation | None: ...
@@ -207,6 +212,27 @@ class InMemoryRepo:
         self.consent_rows: list[Consent] = []
         self.escalations: dict[str, Escalation] = {}
         self.responses: list[ClinicianResponse] = []
+        self.staff: dict[str, object] = {}       # auth_user_id -> escalation.Staff
+
+    def add_staff(self, auth_user_id: str, staff) -> None:
+        self.staff[auth_user_id] = staff
+
+    def find_staff_by_auth_user(self, auth_user_id: str):
+        return self.staff.get(auth_user_id)
+
+    def get_patient(self, patient_id: str) -> dict | None:
+        p = self.patients.get(patient_id)
+        return {"id": patient_id, **p} if p else None
+
+    def list_patients(self, clinic_id: str) -> list[str]:
+        return [pid for pid, p in self.patients.items() if p["clinic_id"] == clinic_id]
+
+    def sessions_for_patient(self, patient_id: str) -> list[LeadSession]:
+        return [s for s in self.sessions.values() if s.patient_id == patient_id]
+
+    def escalations_for_patient(self, patient_id: str) -> list[Escalation]:
+        return sorted((e for e in self.escalations.values() if e.patient_id == patient_id),
+                      key=lambda e: e.created_at)
 
     def add_escalation(self, escalation: Escalation) -> Escalation:
         self.escalations[escalation.id] = escalation

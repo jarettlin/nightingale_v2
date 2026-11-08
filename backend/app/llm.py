@@ -41,6 +41,14 @@ class FakeLLM:
         return p["system"] + "\n" + p["user"]
 
 
+class UnconfiguredLLM:
+    """No model configured yet: every call is an outage, so the app runs in its
+    safe fallback mode (rules-only risk, templates, offer to send to the clinic)."""
+
+    def complete(self, system: str, user: str, timeout_s: float = 10.0) -> str:
+        raise LLMUnavailable("no model configured")
+
+
 class SafeLLM:
     def __init__(self, client: LLMClient):
         self._client = client

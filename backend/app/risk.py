@@ -87,6 +87,10 @@ INTENT_RULES = {
                                     r"reduce|skip|change|switch)\b", re.IGNORECASE),
     "uncertain": re.compile(r"\b(not sure|unsure|confused|don'?t (know|understand)|is that bad|should i worry)\b",
                             re.IGNORECASE),
+    "identity_question": re.compile(r"\b(are you (a |an )?(real|human|person|doctor|nurse|bot|robot|ai|machine)|"
+                                    r"am i (talking|speaking|chatting) (to|with) (a |an )?(real|human|person|doctor|"
+                                    r"bot|ai|machine)|is this (a |an )?(bot|ai|real person|human)|"
+                                    r"who am i (talking|speaking|chatting) (to|with))", re.IGNORECASE),
 }
 
 NEGATION = re.compile(r"\b(no|not|never|don'?t have|do not have|without|denies|haven'?t had|no longer)\b[\w\s,]{0,20}$",
