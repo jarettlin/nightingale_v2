@@ -14,8 +14,8 @@ export default defineConfig({
         name: 'Nightingale',
         short_name: 'Nightingale',
         description: 'Ask Sunrise Fertility Clinic anything, then continue securely with their nurse team.',
-        theme_color: '#0f6e63',
-        background_color: '#f6f4ef',
+        theme_color: '#faf8f7',
+        background_color: '#faf8f7',
         display: 'standalone',
         start_url: '/',
         icons: [

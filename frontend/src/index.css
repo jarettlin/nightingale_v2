@@ -1,21 +1,23 @@
 :root {
-  --bg: #f6f4ef;
+  /* One accent (plum) on warm neutrals. Colour only carries meaning:
+     your messages, the nurse team, and danger. */
+  --bg: #faf8f7;
   --surface: #ffffff;
-  --ink: #1f2a28;
-  --muted: #5f6d69;
-  --line: #e3dfd6;
-  --brand: #0f6e63;
+  --ink: #241f23;
+  --muted: #6e6570;
+  --line: #ebe5e9;
+  --brand: #7a3e6c;
   --brand-ink: #ffffff;
-  --brand-soft: #e2f1ee;
-  --patient: #d7efe9;
-  --patient-ink: #12322d;
-  --system: #fff6dc;
-  --system-ink: #5b4a14;
-  --clinician: #e8e4fb;
+  --brand-soft: #f5ecf2;
+  --patient: #7a3e6c;
+  --patient-ink: #ffffff;
+  --system: #f1edf0;
+  --system-ink: #5c535b;
+  --clinician: #edf4ef;
+  --clinician-ink: #2e6b4a;
   --danger: #b42318;
   --danger-soft: #fdecea;
   --radius: 18px;
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   color-scheme: light;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   font-size: 16px;
@@ -24,22 +26,22 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0f1514;
-    --surface: #18201f;
-    --ink: #e7ecea;
-    --muted: #9aa8a4;
-    --line: #2a3533;
-    --brand: #3fb8a6;
-    --brand-ink: #062621;
-    --brand-soft: #16302c;
-    --patient: #1d3b36;
-    --patient-ink: #dff3ee;
-    --system: #2e2812;
-    --system-ink: #f1e2a6;
-    --clinician: #26233b;
+    --bg: #141214;
+    --surface: #1e1b1e;
+    --ink: #efe9ee;
+    --muted: #a89ea6;
+    --line: #322c31;
+    --brand: #d9a2c9;
+    --brand-ink: #2a0f22;
+    --brand-soft: #33212e;
+    --patient: #6a3360;
+    --patient-ink: #fbeef7;
+    --system: #252125;
+    --system-ink: #c9bfc6;
+    --clinician: #1b2a21;
+    --clinician-ink: #8ccaa5;
     --danger: #ff8a7a;
     --danger-soft: #3a1c18;
-    --shadow: none;
     color-scheme: dark;
   }
 }
@@ -65,25 +67,26 @@ input, textarea { font: inherit; color: inherit; }
   align-items: center;
   gap: 12px;
   padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
-  background: var(--brand);
-  color: var(--brand-ink);
+  background: var(--surface);
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
 }
 .avatar {
   width: 38px; height: 38px; border-radius: 50%;
   display: grid; place-items: center;
-  background: var(--brand-ink); color: var(--brand); font-weight: 700;
+  background: var(--brand); color: var(--brand-ink); font-weight: 700;
 }
 .topbar-text { flex: 1; min-width: 0; }
 .topbar-title { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.topbar-sub { font-size: 12.5px; opacity: 0.85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar-sub { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .profile-button {
-  border: 1px solid color-mix(in srgb, var(--brand-ink) 40%, transparent);
-  background: transparent; color: var(--brand-ink);
+  border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink);
   border-radius: 999px; padding: 6px 10px; font-size: 14px;
   display: flex; align-items: center; gap: 6px; flex-shrink: 0;
 }
 .badge {
-  background: var(--brand-ink); color: var(--brand);
+  background: var(--brand); color: var(--brand-ink);
   border-radius: 999px; min-width: 20px; padding: 0 6px; font-size: 12px; font-weight: 700; text-align: center;
 }
 
@@ -111,14 +114,15 @@ input, textarea { font: inherit; color: inherit; }
   padding: 9px 13px;
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  border: 1px solid var(--line);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .bubble-assistant { border-top-left-radius: 6px; }
-.bubble-patient { background: var(--patient); color: var(--patient-ink); border-top-right-radius: 6px; }
-.bubble-clinician { background: var(--clinician); border-top-left-radius: 6px; }
-.bubble-system { background: var(--system); color: var(--system-ink); font-size: 14.5px; text-align: center; max-width: 92%; }
+.bubble-patient { border-color: transparent; background: var(--patient); color: var(--patient-ink); border-top-right-radius: 6px; }
+.bubble-clinician { border-color: transparent; background: var(--clinician); border-top-left-radius: 6px; }
+.bubble-clinician .bubble-label { color: var(--clinician-ink); }
+.bubble-system { border-color: transparent; background: var(--system); color: var(--system-ink); font-size: 14.5px; text-align: center; max-width: 92%; }
 .bubble-label { font-size: 12px; font-weight: 650; color: var(--brand); margin-bottom: 2px; }
 .bubble-hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
 
@@ -173,13 +177,13 @@ input, textarea { font: inherit; color: inherit; }
   display: flex; align-items: flex-end; gap: 8px;
   padding: 8px 12px 4px;
   border-top: 1px solid var(--line);
-  background: var(--bg);
+  background: var(--surface);
 }
 .composer textarea {
   flex: 1; resize: none; max-height: 120px;
   padding: 10px 14px;
   border: 1px solid var(--line); border-radius: 22px;
-  background: var(--surface); outline: none;
+  background: var(--bg); outline: none;
 }
 .composer textarea:focus { border-color: var(--brand); }
 .send {
@@ -189,7 +193,7 @@ input, textarea { font: inherit; color: inherit; }
 }
 .send:disabled { opacity: 0.4; }
 .emergency-note {
-  margin: 0; padding: 2px 16px calc(8px + env(safe-area-inset-bottom));
+  margin: 0; background: var(--surface); padding: 2px 16px calc(8px + env(safe-area-inset-bottom));
   font-size: 12px; color: var(--muted); text-align: center;
 }
 

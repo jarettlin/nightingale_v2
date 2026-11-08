@@ -15,15 +15,15 @@ code { font-size: 13px; }
 .staff-top {
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
-  background: var(--brand); color: var(--brand-ink);
+  background: var(--surface); color: var(--ink); border-bottom: 1px solid var(--line);
 }
 .staff-top nav { display: flex; gap: 4px; flex: 1; }
 .staff-top nav button {
-  border: 0; border-radius: 999px; padding: 6px 12px; background: transparent; color: var(--brand-ink);
+  border: 0; border-radius: 999px; padding: 6px 12px; background: transparent; color: var(--muted);
   display: flex; align-items: center; gap: 6px;
 }
-.staff-top nav button.on { background: color-mix(in srgb, var(--brand-ink) 18%, transparent); }
-.staff-top .link { color: var(--brand-ink); }
+.staff-top nav button.on { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+.staff-top .link { color: var(--muted); }
 
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
 .signin { width: 100%; max-width: 400px; }
@@ -57,7 +57,7 @@ code { font-size: 13px; }
 .risk-med { background: var(--med-soft); color: var(--med); }
 .pill { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--line); color: var(--ink); }
 .status-sent { background: var(--med-soft); color: var(--med); }
-.status-responded, .status-closed { background: var(--brand-soft); color: var(--brand); }
+.status-responded, .status-closed { background: var(--clinician); color: var(--clinician-ink); }
 
 .triage, .facts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .bullet {
