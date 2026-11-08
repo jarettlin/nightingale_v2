@@ -17,11 +17,11 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.memory import MemoryItem
-from app.repository import LeadSession, StoredMessage
+from app.repository import Consent, ContactPoint, LeadContact, LeadSession, StoredMessage
 
 LEAD_FIELDS = ["id", "clinic_id", "source_channel", "identity_level", "campaign_id", "creative",
                "landing_page", "referral_topic", "guest_auth_user_id", "patient_id", "stage",
-               "landing_timestamp", "expires_at", "purged_at"]
+               "landing_timestamp", "expires_at", "purged_at", "converted_at"]
 MESSAGE_FIELDS = ["id", "lead_session_id", "sender", "sent_as", "content_encrypted", "content_redacted",
                   "redaction_ok", "redaction_entities", "risk_level", "risk_reason", "risk_confidence",
                   "risk_source", "risk_assessed_at", "risk_rule_codes", "intents", "escalation_required",
@@ -146,6 +146,87 @@ class SupabaseRepo:
             """insert into public.audit_log (actor_type, actor_id, action, target_table, target_id, metadata)
                values (%s, %s, %s, %s, %s, %s)""",
             (actor_type, actor_id, action, target_table, target_id, Jsonb(json.loads(json.dumps(metadata)))))
+
+    def set_lead_contact(self, contact: LeadContact) -> None:
+        self.conn.execute(
+            """insert into public.lead_contact (lead_session_id, social_platform, social_handle, volunteered_email)
+               values (%s, %s, %s, %s)
+               on conflict (lead_session_id) do update
+                 set social_platform = excluded.social_platform, social_handle = excluded.social_handle,
+                     volunteered_email = excluded.volunteered_email""",
+            (contact.lead_session_id, contact.social_platform, contact.social_handle, contact.volunteered_email))
+
+    def get_lead_contact(self, lead_session_id: str) -> LeadContact | None:
+        row = self.conn.execute(
+            """select lead_session_id, social_platform, social_handle, volunteered_email
+               from public.lead_contact where lead_session_id = %s""", (lead_session_id,)).fetchone()
+        return LeadContact(**_str(row)) if row else None
+
+    def create_patient(self, clinic_id: str, auth_user_id: str | None) -> str:
+        row = self.conn.execute("insert into public.patient (clinic_id, auth_user_id) values (%s, %s) returning id",
+                                (clinic_id, auth_user_id)).fetchone()
+        return str(row["id"])
+
+    def find_patient_by_email(self, clinic_id: str, email: str) -> str | None:
+        row = self.conn.execute(
+            """select p.id from public.patient p
+               join public.contact_point c on c.patient_id = p.id
+               where p.clinic_id = %s and c.kind = 'email' and lower(c.value) = lower(%s)
+                 and c.valid_to is null and c.verified_at is not null
+               limit 1""", (clinic_id, email)).fetchone()
+        return str(row["id"]) if row else None
+
+    def find_patient_by_auth_user(self, auth_user_id: str) -> str | None:
+        row = self.conn.execute("select id from public.patient where auth_user_id = %s",
+                                (auth_user_id,)).fetchone()
+        return str(row["id"]) if row else None
+
+    def upsert_contact_point(self, contact: ContactPoint) -> None:
+        current = self.conn.execute(
+            """select id, value from public.contact_point
+               where patient_id = %s and kind = %s and valid_to is null and is_primary""",
+            (contact.patient_id, contact.kind)).fetchone()
+        if current and current["value"].lower() == contact.value.lower():
+            self.conn.execute(
+                "update public.contact_point set verified_at = coalesce(verified_at, %s) where id = %s",
+                (contact.verified_at, current["id"]))
+            return
+        if current:  # replaced, not deleted: history survives
+            self.conn.execute("update public.contact_point set valid_to = now() where id = %s", (current["id"],))
+        self.conn.execute(
+            """insert into public.contact_point (patient_id, kind, value, verified_at, is_primary, valid_from)
+               values (%s, %s, %s, %s, %s, %s)""",
+            (contact.patient_id, contact.kind, contact.value, contact.verified_at, contact.is_primary,
+             contact.valid_from))
+
+    def contact_points(self, patient_id: str) -> list[ContactPoint]:
+        rows = self.conn.execute(
+            """select patient_id, kind, value, verified_at, is_primary, valid_from, valid_to
+               from public.contact_point where patient_id = %s order by valid_from""", (patient_id,)).fetchall()
+        return [ContactPoint(**_str(r)) for r in rows]
+
+    def add_consent(self, consent: Consent) -> None:
+        self.conn.execute(
+            """insert into public.consent (clinic_id, lead_session_id, patient_id, kind, granted, policy_version, recorded_at)
+               values (%s, %s, %s, %s, %s, %s, %s)""",
+            (consent.clinic_id, consent.lead_session_id, consent.patient_id, consent.kind, consent.granted,
+             consent.policy_version, consent.recorded_at))
+
+    def consents(self, patient_id: str) -> list[Consent]:
+        rows = self.conn.execute(
+            """select clinic_id, kind, granted, policy_version, patient_id, lead_session_id, recorded_at
+               from public.consent where patient_id = %s order by recorded_at""", (patient_id,)).fetchall()
+        return [Consent(**_str(r)) for r in rows]
+
+    def link_session_to_patient(self, lead_session_id: str, patient_id: str) -> None:
+        row = self.conn.execute(
+            """update public.lead_session set patient_id = %s, converted_at = now()
+               where id = %s and patient_id is null returning id""", (patient_id, lead_session_id)).fetchone()
+        if row is None:
+            existing = self.conn.execute("select patient_id from public.lead_session where id = %s",
+                                         (lead_session_id,)).fetchone()
+            if existing is None or str(existing["patient_id"]) != patient_id:
+                raise ValueError("session already belongs to another patient")
 
     @contextmanager
     def as_user(self, auth_user_id: str):

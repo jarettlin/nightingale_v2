@@ -59,6 +59,35 @@ def test_pipeline_round_trip_on_supabase(db_repo, clinic_id, llm, cipher):
     assert db_repo.get_lead_session(session.id).stage == "value_event"
 
 
+def test_conversion_round_trip_on_supabase(db_repo, clinic_id, llm, cipher):
+    from app.conversion import ConsentChoices, SignupDetails, convert, start_auth
+    from app.pipeline import handle_patient_message
+    from app.repository import LeadContact
+
+    session = db_repo.create_lead_session(clinic_id=clinic_id, source_channel="instagram_comment",
+                                          identity_level="handle", campaign_id="ivf_over40")
+    db_repo.set_lead_contact(LeadContact(session.id, social_platform="instagram", social_handle="@test.handle"))
+    guest = handle_patient_message(db_repo, llm, cipher, session.id, "thinking about IVF, irregular periods for 6 months")
+    start_auth(db_repo, session.id)
+
+    details = SignupDetails(auth_user_id=None, email="synthetic@example.com",
+                            email_verified_at="2026-11-08T10:00:00+00:00", phone="+60123456789")
+    result = convert(db_repo, cipher, session.id, details, ConsentChoices(data_sharing=True))
+    again = convert(db_repo, cipher, session.id, details, ConsentChoices(data_sharing=True))
+
+    assert again.already_converted and again.patient_id == result.patient_id
+    linked = db_repo.get_lead_session(session.id)
+    assert linked.patient_id == result.patient_id and linked.converted_at and linked.stage == "patient_created"
+    assert result.profile["chief_complaint"][0]["provenance_message_id"] == guest.patient_message_id
+    assert {c.kind for c in db_repo.contact_points(result.patient_id)} == {"email", "phone", "instagram"}
+    assert [(c.kind, c.granted) for c in db_repo.consents(result.patient_id)] == \
+           [("data_sharing", True), ("marketing", False)]
+    assert db_repo.find_patient_by_email(clinic_id, "SYNTHETIC@example.com") == result.patient_id
+
+    # RLS sees the consent: the database's own helper agrees the patient consented
+    assert db_repo.conn.execute("select app.patient_consented(%s) as ok", (result.patient_id,)).fetchone()["ok"]
+
+
 def test_unknown_session_id_is_none(db_repo):
     assert db_repo.get_lead_session("not-a-uuid") is None
     assert db_repo.get_lead_session("00000000-0000-0000-0000-000000000000") is None

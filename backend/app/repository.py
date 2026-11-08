@@ -36,6 +36,7 @@ class LeadSession:
     landing_timestamp: str = field(default_factory=now)
     expires_at: str = field(default_factory=lambda: (datetime.now(timezone.utc) + timedelta(days=7)).isoformat())
     purged_at: str | None = None
+    converted_at: str | None = None
 
     def attribution(self) -> dict:
         """What must survive to the patient record and every escalation."""
@@ -68,10 +69,51 @@ class StoredMessage:
     created_at: str = field(default_factory=now)
 
 
+@dataclass
+class LeadContact:
+    """Identity a guest volunteered or the channel told us (e.g. their Instagram handle)."""
+    lead_session_id: str
+    social_platform: str | None = None
+    social_handle: str | None = None
+    volunteered_email: str | None = None
+
+
+@dataclass
+class ContactPoint:
+    patient_id: str
+    kind: str                           # email | phone | instagram | tiktok | facebook | whatsapp
+    value: str
+    verified_at: str | None = None
+    is_primary: bool = True
+    valid_from: str = field(default_factory=now)
+    valid_to: str | None = None
+
+
+@dataclass
+class Consent:
+    clinic_id: str
+    kind: str                           # data_sharing | marketing | transactional_email
+    granted: bool
+    policy_version: str
+    patient_id: str | None = None
+    lead_session_id: str | None = None
+    recorded_at: str = field(default_factory=now)
+
+
 class Repository(Protocol):
     def create_lead_session(self, **fields) -> LeadSession: ...
     def get_lead_session(self, lead_session_id: str) -> LeadSession | None: ...
     def advance_stage(self, lead_session_id: str, stage: str) -> None: ...
+    def set_lead_contact(self, contact: LeadContact) -> None: ...
+    def get_lead_contact(self, lead_session_id: str) -> LeadContact | None: ...
+    def create_patient(self, clinic_id: str, auth_user_id: str | None) -> str: ...
+    def find_patient_by_email(self, clinic_id: str, email: str) -> str | None: ...
+    def find_patient_by_auth_user(self, auth_user_id: str) -> str | None: ...
+    def upsert_contact_point(self, contact: ContactPoint) -> None: ...
+    def contact_points(self, patient_id: str) -> list[ContactPoint]: ...
+    def add_consent(self, consent: Consent) -> None: ...
+    def consents(self, patient_id: str) -> list[Consent]: ...
+    def link_session_to_patient(self, lead_session_id: str, patient_id: str) -> None: ...
     def add_message(self, message: StoredMessage) -> StoredMessage: ...
     def list_messages(self, lead_session_id: str) -> list[StoredMessage]: ...
     def memory_store(self, lead_session_id: str): ...
@@ -119,6 +161,54 @@ class InMemoryRepo:
         self.memory_rows: list[tuple[str, MemoryItem]] = []
         self.funnel_events: list[dict] = []
         self.audit_log: list[dict] = []
+        self.lead_contacts: dict[str, LeadContact] = {}
+        self.patients: dict[str, dict] = {}
+        self.contacts: list[ContactPoint] = []
+        self.consent_rows: list[Consent] = []
+
+    def set_lead_contact(self, contact: LeadContact) -> None:
+        self.lead_contacts[contact.lead_session_id] = contact
+
+    def get_lead_contact(self, lead_session_id: str) -> LeadContact | None:
+        return self.lead_contacts.get(lead_session_id)
+
+    def create_patient(self, clinic_id: str, auth_user_id: str | None) -> str:
+        patient_id = str(uuid.uuid4())
+        self.patients[patient_id] = {"clinic_id": clinic_id, "auth_user_id": auth_user_id}
+        return patient_id
+
+    def find_patient_by_email(self, clinic_id: str, email: str) -> str | None:
+        return next((c.patient_id for c in self.contacts
+                     if c.kind == "email" and c.value.lower() == email.lower() and c.valid_to is None
+                     and c.verified_at and self.patients[c.patient_id]["clinic_id"] == clinic_id), None)
+
+    def find_patient_by_auth_user(self, auth_user_id: str) -> str | None:
+        return next((pid for pid, p in self.patients.items() if p["auth_user_id"] == auth_user_id), None)
+
+    def upsert_contact_point(self, contact: ContactPoint) -> None:
+        for c in self.contacts:
+            if c.patient_id == contact.patient_id and c.kind == contact.kind and c.valid_to is None:
+                if c.value.lower() == contact.value.lower():
+                    c.verified_at = c.verified_at or contact.verified_at
+                    return
+                c.valid_to = now()  # replaced, not deleted: history survives
+        self.contacts.append(contact)
+
+    def contact_points(self, patient_id: str) -> list[ContactPoint]:
+        return [c for c in self.contacts if c.patient_id == patient_id]
+
+    def add_consent(self, consent: Consent) -> None:
+        self.consent_rows.append(consent)
+
+    def consents(self, patient_id: str) -> list[Consent]:
+        return [c for c in self.consent_rows if c.patient_id == patient_id]
+
+    def link_session_to_patient(self, lead_session_id: str, patient_id: str) -> None:
+        session = self.sessions[lead_session_id]
+        if session.patient_id not in (None, patient_id):
+            raise ValueError("session already belongs to another patient")
+        if session.patient_id is None:
+            session.patient_id, session.converted_at = patient_id, now()
 
     def create_lead_session(self, **fields) -> LeadSession:
         session = LeadSession(id=str(uuid.uuid4()), **fields)
