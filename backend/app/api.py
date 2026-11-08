@@ -204,7 +204,8 @@ def create_app(deps: Deps) -> FastAPI:
         session = repo.get_lead_session(session.id)
         return {
             "message_id": result.patient_message_id,
-            "reply": {"id": result.assistant_message_id, "text": result.reply},
+            "reply": {"id": result.assistant_message_id, "text": result.reply,
+                      "citations": result.citations, "confidence": result.reply_confidence},
             "risk_level": result.risk.risk_level.label,
             "show_send_to_clinic": result.show_send_to_clinic,
             "conversion_offer": conversion_offer(session, value_delivered=result.advice_generated,

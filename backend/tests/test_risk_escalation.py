@@ -64,13 +64,22 @@ def test_negated_high_is_med_not_low():
 @pytest.mark.parametrize("text", [
     "what are your opening hours?",
     "how much does egg freezing cost?",
-    "I had a headache for 3 days",
+    "what is an AMH test",
 ])
-def test_low_risk_gets_an_answer(text):
-    fake = FakeLLM(replies=[LOW_OPINION, "Here's some general information..."])
-    result = handle_turn(text, SafeLLM(fake))
+def test_low_risk_gets_a_grounded_answer(text):
+    from app.knowledge import default_kb
+    from tests.conftest import RoutingLLM
+    result = handle_turn(text, SafeLLM(RoutingLLM()), sources=default_kb().search(text))
     assert result.risk.risk_level == Risk.LOW
-    assert result.advice_generated
+    assert result.advice_generated and result.citations
+
+
+def test_low_risk_without_clinic_sources_is_honest_not_improvised():
+    fake = FakeLLM(replies=[LOW_OPINION])
+    result = handle_turn("I had a headache for 3 days", SafeLLM(fake), sources=[])
+    assert result.risk.risk_level == Risk.LOW and not result.advice_generated
+    assert "rather not guess" in result.reply
+    assert advice_calls(fake) == []  # the model was never asked to make something up
 
 
 def test_llm_can_raise_risk_but_not_lower_it():

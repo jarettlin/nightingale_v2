@@ -118,6 +118,18 @@ def test_escalation_round_trip_on_supabase(db_repo, clinic_id, llm, cipher):
     assert [e.id for e in db_repo.escalation_queue(clinic_id)] == [stored.id]
 
 
+def test_citations_are_stored_on_supabase(db_repo, clinic_id, llm, cipher):
+    from app.pipeline import handle_patient_message
+
+    session = db_repo.create_lead_session(clinic_id=clinic_id, source_channel="website_widget",
+                                          identity_level="anonymous")
+    result = handle_patient_message(db_repo, llm, cipher, session.id, "how much does egg freezing cost?")
+    rows = db_repo.citations_for(result.assistant_message_id)
+    assert rows and rows[0]["source_doc"] == "kb/egg-freezing.md"
+    stored = db_repo.get_message(result.assistant_message_id)
+    assert stored.reply_confidence == "high" and stored.advice_generated
+
+
 def test_unknown_session_id_is_none(db_repo):
     assert db_repo.get_lead_session("not-a-uuid") is None
     assert db_repo.get_lead_session("00000000-0000-0000-0000-000000000000") is None

@@ -132,7 +132,15 @@ class ClinicianResponse:
     created_at: str = field(default_factory=now)
 
 
+def citation_rows(message_id: str, citations: list) -> list[dict]:
+    """(marker, Chunk) pairs -> rows for the citation table."""
+    return [{"message_id": message_id, "marker": marker, "source_doc": c.doc, "source_version": c.version,
+             "start_char": c.start, "end_char": c.end} for marker, c in citations]
+
+
 class Repository(Protocol):
+    def add_citations(self, message_id: str, citations: list) -> None: ...
+    def citations_for(self, message_id: str) -> list[dict]: ...
     def find_staff_by_auth_user(self, auth_user_id: str): ...
     def get_patient(self, patient_id: str) -> dict | None: ...
     def list_patients(self, clinic_id: str) -> list[str]: ...
@@ -213,6 +221,13 @@ class InMemoryRepo:
         self.escalations: dict[str, Escalation] = {}
         self.responses: list[ClinicianResponse] = []
         self.staff: dict[str, object] = {}       # auth_user_id -> escalation.Staff
+        self.citations: list[dict] = []
+
+    def add_citations(self, message_id: str, citations: list) -> None:
+        self.citations += citation_rows(message_id, citations)
+
+    def citations_for(self, message_id: str) -> list[dict]:
+        return [c for c in self.citations if c["message_id"] == message_id]
 
     def add_staff(self, auth_user_id: str, staff) -> None:
         self.staff[auth_user_id] = staff

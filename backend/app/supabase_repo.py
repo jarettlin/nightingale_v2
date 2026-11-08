@@ -19,7 +19,7 @@ from psycopg.types.json import Jsonb
 
 from app.memory import MemoryItem
 from app.repository import (ClinicianResponse, Consent, ContactPoint, Escalation, LeadContact, LeadSession,
-                            StoredMessage)
+                            StoredMessage, citation_rows)
 
 LEAD_FIELDS = ["id", "clinic_id", "source_channel", "identity_level", "campaign_id", "creative",
                "landing_page", "referral_topic", "guest_auth_user_id", "patient_id", "stage",
@@ -238,6 +238,19 @@ class SupabaseRepo:
                                          (lead_session_id,)).fetchone()
             if existing is None or str(existing["patient_id"]) != patient_id:
                 raise ValueError("session already belongs to another patient")
+
+    def add_citations(self, message_id: str, citations: list) -> None:
+        for row in citation_rows(message_id, citations):
+            self.conn.execute(
+                """insert into public.citation (message_id, marker, source_doc, source_version, start_char, end_char)
+                   values (%(message_id)s, %(marker)s, %(source_doc)s, %(source_version)s, %(start_char)s, %(end_char)s)""",
+                row)
+
+    def citations_for(self, message_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            """select message_id, marker, source_doc, source_version, start_char, end_char
+               from public.citation where message_id = %s order by marker""", (message_id,)).fetchall()
+        return [_str(r) for r in rows]
 
     def find_staff_by_auth_user(self, auth_user_id: str):
         from app.escalation import Staff

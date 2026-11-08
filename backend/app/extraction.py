@@ -159,7 +159,8 @@ def rule_extract(text: str, current: list[MemoryItem]) -> Extraction:
 EXTRACT_SYSTEM = (
     "You maintain a patient's structured profile for a clinic. You never diagnose. "
     "Given CURRENT_PROFILE and a new MESSAGE, return JSON only:\n"
-    '{"operations": [...], "clarify": null or "question"}\n'
+    '{"operations": [...], "clarify": null}\n'
+    "Set clarify to one short question for the patient ONLY when a correction is ambiguous; otherwise null.\n"
     "Operations:\n"
     '  {"op":"add","kind":K,"value":V,"status":S,"detail":{...}}\n'
     '  {"op":"update_status","target_id":ID,"status":S,"detail":{"effective":"last week"}}\n'
@@ -194,7 +195,9 @@ def _parse(raw: str, aliases: dict[str, str]) -> Extraction:
                 op = {**op, "target_id": aliases.get(op["target_id"], op["target_id"])}
             ops.append(op)
     clarify = data.get("clarify")
-    return Extraction(ops, clarify if isinstance(clarify, str) and clarify else None, "llm")
+    # Only a real question reaches the patient: not "question", "null" or an empty string
+    looks_like_question = isinstance(clarify, str) and len(clarify.strip()) >= 10 and clarify.strip().endswith("?")
+    return Extraction(ops, clarify.strip() if looks_like_question else None, "llm")
 
 
 def extract(text: str, current: list[MemoryItem], llm: SafeLLM | None = None) -> Extraction:

@@ -9,7 +9,8 @@
 
 Value events are defined here, in one place. A value_event is a turn where the
 patient got substantive help, not just any reply:
-    service_answer        a low-risk question answered with general information
+    service_answer        a low-risk question answered from the clinic's knowledge base,
+                          with at least one citation that checked out
     articulation_draft    a shareable 240-char message drafted for them        (later)
     question_prep         questions to ask the doctor prepared for them         (later)
     conversation_summary  a summary of their conversation sent or shown         (later)
@@ -23,13 +24,18 @@ from dataclasses import dataclass
 from app.config import DEFAULT_CLINIC, ClinicConfig
 from app.crypto import Cipher
 from app.extraction import extract
+from app.grounding import MARKER
 from app.intake import handle_turn
+from app.knowledge import KnowledgeBase, default_kb, tokens
 from app.llm import SafeLLM
 from app.logs import log_event
 from app.memory import apply_operations, profile
 from app.redaction import redact
 from app.repository import Repository, StoredMessage, now
 from app.risk import RiskAssessment
+
+
+HISTORY_TURNS = 6
 
 
 class SessionNotFound(Exception):
@@ -51,11 +57,14 @@ class PipelineResult:
     clarify: str | None
     profile: dict
     memory_rejections: list[str]
+    citations: list[dict]
+    reply_confidence: str
 
 
 def handle_patient_message(repo: Repository, llm: SafeLLM, cipher: Cipher, lead_session_id: str, text: str,
                            clinic: ClinicConfig = DEFAULT_CLINIC, extractor_llm: SafeLLM | None = None,
-                           known_identifiers: list[str] | None = None) -> PipelineResult:
+                           known_identifiers: list[str] | None = None,
+                           kb: KnowledgeBase | None = None) -> PipelineResult:
     session = repo.get_lead_session(lead_session_id)
     if session is None:
         raise SessionNotFound(lead_session_id)
@@ -63,10 +72,20 @@ def handle_patient_message(repo: Repository, llm: SafeLLM, cipher: Cipher, lead_
         raise SessionExpired(lead_session_id)
 
     sent_as = "patient" if session.patient_id else "guest"
-    first_message = not any(m.sender == "patient" for m in repo.list_messages(session.id))
+    earlier = repo.list_messages(session.id)
+    first_message = not any(m.sender == "patient" for m in earlier)
+    # Last few turns, redacted, citation markers stripped: context for the reply only
+    history = [(m.sender, MARKER.sub("", m.content_redacted).strip()) for m in earlier
+               if m.sender in ("patient", "assistant") and m.content_redacted][-HISTORY_TURNS:]
 
     redaction = redact(text, known_identifiers)
-    turn = handle_turn(text, llm, clinic, known_identifiers)
+    query = redaction.redacted_text if redaction.ok else ""
+    previous = next((content for sender, content in reversed(history) if sender == "patient"), None)
+    if previous and len(tokens(query)) < 4:
+        query = f"{previous} {query}"  # "how much does it cost?" -> search with what "it" was
+    # Retrieval runs locally on redacted text: only clinic documents come back
+    sources = (kb or default_kb()).search(query)
+    turn = handle_turn(text, llm, clinic, known_identifiers, sources=sources, history=history)
     risk = turn.risk
 
     patient_msg = repo.add_message(StoredMessage(
@@ -105,12 +124,11 @@ def handle_patient_message(repo: Repository, llm: SafeLLM, cipher: Cipher, lead_
         content_encrypted=cipher.encrypt(reply),
         content_redacted=reply_redaction.redacted_text if reply_redaction.ok else None,
         redaction_ok=reply_redaction.ok,
-        # Fixed safety templates are fully trusted; generated text is "med" until
-        # citation checking can vouch for it
-        reply_confidence="med" if turn.advice_generated else "high",
+        reply_confidence=turn.reply_confidence,
         advice_generated=turn.advice_generated,
         in_reply_to=patient_msg.id,
     ))
+    repo.add_citations(assistant_msg.id, turn.citations)
 
     if first_message:
         repo.add_funnel_event(session.id, "conversation_started")
@@ -137,4 +155,8 @@ def handle_patient_message(repo: Repository, llm: SafeLLM, cipher: Cipher, lead_
         clarify=extraction.clarify,
         profile=profile(store),
         memory_rejections=[r.reason for r in results if not r.applied],
+        citations=[{"marker": m, "title": c.title, "heading": c.heading, "source_doc": c.doc,
+                    "start_char": c.start, "end_char": c.end, "excerpt": c.text}
+                   for m, c in turn.citations],
+        reply_confidence=turn.reply_confidence,
     )

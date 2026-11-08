@@ -155,6 +155,17 @@ def test_llm_junk_falls_back_to_rules():
     assert meds(store) == [("Advil", "active")]
 
 
+@pytest.mark.parametrize("clarify, shown", [
+    ("question", None),                       # what OpenAI actually returned once
+    ("null", None),
+    ("", None),
+    ("Which one did you stop, Advil or metformin?", "Which one did you stop, Advil or metformin?"),
+])
+def test_only_real_clarifying_questions_reach_the_patient(clarify, shown):
+    reply = json.dumps({"operations": [], "clarify": clarify})
+    assert extract("I stopped it", [], SafeLLM(FakeLLM(replies=[reply]))).clarify == shown
+
+
 def test_llm_down_falls_back_to_rules():
     store = InMemoryStore()
     turn(store, "I take Advil", "msg_1", SafeLLM(FakeLLM(fail=True)))

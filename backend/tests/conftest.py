@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 
@@ -10,9 +11,10 @@ from app.repository import InMemoryRepo
 
 class RoutingLLM:
     """Answers by purpose rather than call order: low risk for risk questions,
-    a canned answer otherwise. Records every prompt it receives."""
+    and for replies, a well-behaved answer: the first sentence of source [S1],
+    cited. Pass `answer` to script a specific (e.g. badly behaved) reply."""
 
-    def __init__(self, answer: str = "Here is some general information. [S1]"):
+    def __init__(self, answer: str | None = None):
         self.answer = answer
         self.prompts: list[dict] = []
 
@@ -20,7 +22,13 @@ class RoutingLLM:
         self.prompts.append({"system": system, "user": user, "json_mode": json_mode})
         if system == RISK_SYSTEM:
             return json.dumps({"risk_level": "low", "reason": "test", "confidence": "high"})
-        return self.answer
+        if self.answer is not None:
+            return self.answer
+        source = re.search(r"\[S1\] \(.*?\)\n(.+?)(?:\n\n\[S|\Z)", system, re.S)
+        if not source:
+            return "I don't have that information."
+        first_sentence = re.split(r"(?<=[.!?])\s+", source.group(1).strip())[0]
+        return f"{first_sentence} [S1]"
 
 
 @pytest.fixture

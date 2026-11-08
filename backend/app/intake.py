@@ -1,14 +1,18 @@
-"""One patient turn: redact -> risk gate -> reply or hand off.
+"""One patient turn: redact -> risk gate -> grounded reply or hand off.
 
 The ordering is the safety property. When escalation is required, the
 advice-generating LLM call is never made, so there is no advice to leak.
-Database writes and memory extraction plug in here later.
+When it is made, the model may only use the clinic's own sources, and
+grounding.check_reply drops anything the sources don't support. No sources,
+no call: "I don't know" beats a fluent guess.
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.config import DEFAULT_CLINIC, ClinicConfig
+from app.grounding import check_reply
+from app.knowledge import Chunk
 from app.llm import LLMUnavailable, SafeLLM
 from app.logs import log_event
 from app.redaction import RedactionError
@@ -23,9 +27,14 @@ RISK_SYSTEM = (
 
 REPLY_SYSTEM = (
     "You are Nightingale AI, an assistant for {clinic}. You are not a doctor or nurse. "
-    "Be warm and brief. Never diagnose, never suggest starting, stopping or changing medication, "
-    "never give a treatment plan. Give general information only and suggest the clinic for anything "
-    "personal. Identifiers are replaced with [REDACTED]; never ask the patient to repeat them."
+    "Be warm and brief: 2 to 4 sentences. Never diagnose, never suggest starting, stopping or changing "
+    "medication, never give a treatment plan. Identifiers are replaced with [REDACTED]; never ask the "
+    "patient to repeat them.\n"
+    "Use ONLY the SOURCES below. Put the marker of the source you used, like [S1], at the end of every "
+    "sentence that states a fact. Copy numbers exactly as the sources give them. If the sources don't "
+    "answer the question, say you don't have that information and suggest asking the clinic team. "
+    "Never add services, prices, times or facts that aren't in the sources.\n\n"
+    "SOURCES:\n{sources}"
 )
 
 
@@ -35,6 +44,17 @@ class TurnResult:
     risk: RiskAssessment
     show_send_to_clinic: bool
     advice_generated: bool
+    citations: list[tuple[str, Chunk]] = field(default_factory=list)
+    reply_confidence: str = "high"   # fixed templates are fully trusted
+
+
+def format_sources(sources: list[Chunk]) -> str:
+    return "\n\n".join(f"[S{n}] ({c.title} — {c.heading})\n{c.text}" for n, c in enumerate(sources, 1))
+
+
+def not_covered_reply(clinic: ClinicConfig) -> str:
+    return (f"I don't have clinic-approved information on that, so I'd rather not guess. The {clinic.name} "
+            f"team can answer it: continue securely and a nurse will reply, usually within {clinic.response_window}.")
 
 
 def safety_reply(risk: RiskAssessment, clinic: ClinicConfig) -> str:
@@ -92,8 +112,17 @@ def _llm_risk_opinion(llm: SafeLLM, text: str) -> dict:
     return opinion
 
 
+def with_history(text: str, history: list[tuple[str, str]] | None) -> str:
+    """Recent turns (already redacted) so "how much does it cost?" knows what "it" is."""
+    if not history:
+        return text
+    lines = "\n".join(f"{sender}: {content}" for sender, content in history)
+    return f"CONVERSATION SO FAR:\n{lines}\n\nLATEST MESSAGE (answer this): {text}"
+
+
 def handle_turn(text: str, llm: SafeLLM, clinic: ClinicConfig = DEFAULT_CLINIC,
-                known_identifiers: list[str] | None = None) -> TurnResult:
+                known_identifiers: list[str] | None = None, sources: list[Chunk] | None = None,
+                history: list[tuple[str, str]] | None = None) -> TurnResult:
     # Rules run on the raw text locally: nothing leaves the server for this step
     try:
         risk = assess(text, llm_opinion=_llm_risk_opinion(llm, text))
@@ -108,12 +137,25 @@ def handle_turn(text: str, llm: SafeLLM, clinic: ClinicConfig = DEFAULT_CLINIC,
     if "identity_question" in risk.intents:
         return TurnResult(trust_reply(clinic), risk, show_send_to_clinic=True, advice_generated=False)
 
+    if not sources:
+        # Nothing in the knowledge base covers it: don't ask the model to improvise
+        log_event("reply_not_covered", reason="no_sources")
+        return TurnResult(not_covered_reply(clinic), risk, show_send_to_clinic=True, advice_generated=False)
+
     try:
-        reply = llm.complete(REPLY_SYSTEM.format(clinic=clinic.name), text, purpose="reply",
-                             known_identifiers=known_identifiers)
+        # Risk is judged on the latest message alone; only the reply sees the history
+        reply = llm.complete(REPLY_SYSTEM.format(clinic=clinic.name, sources=format_sources(sources)),
+                             with_history(text, history), purpose="reply", known_identifiers=known_identifiers)
     except (LLMUnavailable, RedactionError):
         reply = (f"Sorry, I can't answer properly right now. You can send this to {clinic.name} "
                  f"and a nurse will reply within {clinic.response_window}.")
         return TurnResult(reply, risk, show_send_to_clinic=True, advice_generated=False)
 
-    return TurnResult(reply, risk, show_send_to_clinic=risk.escalation_offered, advice_generated=True)
+    checked = check_reply(reply, sources)
+    log_event("reply_grounding", grounded=checked.grounded, dropped=checked.dropped,
+              citations=len(checked.citations))
+    if not checked.grounded:
+        return TurnResult(not_covered_reply(clinic), risk, show_send_to_clinic=True, advice_generated=False,
+                          reply_confidence="low")
+    return TurnResult(checked.text, risk, show_send_to_clinic=risk.escalation_offered, advice_generated=True,
+                      citations=checked.citations, reply_confidence=checked.confidence)
