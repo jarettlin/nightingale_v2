@@ -9,7 +9,7 @@ risk fields and triage summaries, just with a scripted model instead of OpenAI.
 import json
 import re
 
-from app.conversion import ConsentChoices, SignupDetails, convert
+from app.conversion import ConsentChoices, SignupDetails, convert, start_auth
 from app.crypto import Cipher
 from app.escalation import Staff, send_to_clinic
 from app.intake import RISK_SYSTEM
@@ -69,6 +69,7 @@ def seed(repo, cipher: Cipher, clinic_id: str = "clinic_demo") -> None:
         session = repo.create_lead_session(clinic_id=clinic_id, guest_auth_user_id=p["auth"], **p["session"])
         for text in p["guest"]:
             handle_patient_message(repo, llm, cipher, session.id, text)
+        start_auth(repo, session.id)
         convert(repo, cipher, session.id, SignupDetails(p["auth"], p["email"], VERIFIED, p["phone"]),
                 ConsentChoices(data_sharing=True))
         for text in p["after"]:

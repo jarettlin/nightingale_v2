@@ -130,6 +130,36 @@ def test_citations_are_stored_on_supabase(db_repo, clinic_id, llm, cipher):
     assert stored.reply_confidence == "high" and stored.advice_generated
 
 
+def test_channels_round_trip_on_supabase(db_repo, clinic_id, cipher):
+    from datetime import datetime, timedelta, timezone
+
+    from app.acquisition import claim_link, handle_lead_form
+    from app.config import ClinicConfig
+    from app.leads import funnel, warm_leads
+
+    clinic = ClinicConfig(clinic_id=clinic_id, name="Sunrise Fertility Clinic", emergency_number="999",
+                          response_window="12 to 18 hours")
+    now = datetime.now(timezone.utc)
+    link = handle_lead_form(db_repo, "synthetic3@example.com", "IUI", True, "form-1", clinic, "http://x")
+    token = link.rsplit("/r/", 1)[1]
+
+    # Claim as a real (synthetic) anonymous auth user, so the foreign key holds
+    uid = str(db_repo.conn.execute(
+        "insert into auth.users (id, aud, role, is_anonymous) values (gen_random_uuid(), 'authenticated', "
+        "'authenticated', true) returning id").fetchone()["id"])
+    session = claim_link(db_repo, cipher, token, uid, None, clinic, now)
+    assert session.guest_auth_user_id == uid and session.identity_level == "email"
+    assert db_repo.list_messages(session.id)[0].sender == "assistant"          # stored greeting
+    assert [(c.kind, c.granted) for c in db_repo.lead_consents(session.id)] == [("marketing", True)]
+
+    since = now - timedelta(minutes=5)
+    f = funnel(db_repo, clinic_id, since)
+    assert f["channels"]["lead_form"]["counts"]["visitor"] >= 1
+    leads = warm_leads(db_repo, clinic_id, now)["leads"]
+    mine = next(l for l in leads if l["lead_session_id"] == session.id)
+    assert mine["concern"] == "IUI" and mine["suggestion"].startswith("OK to follow up")
+
+
 def test_unknown_session_id_is_none(db_repo):
     assert db_repo.get_lead_session("not-a-uuid") is None
     assert db_repo.get_lead_session("00000000-0000-0000-0000-000000000000") is None

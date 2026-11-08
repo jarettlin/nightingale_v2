@@ -52,6 +52,7 @@ def llm(model):
 
 
 TEST_JWT_SECRET = "test-secret-at-least-32-bytes-long!!"
+TEST_META_SECRET = "test-meta-app-secret"
 
 
 def make_token(sub: str, anonymous: bool = False, email: str | None = None, minutes: int = 60) -> str:
@@ -86,7 +87,8 @@ def api(repo, cipher, llm):
         yield repo
 
     deps = Deps(repo_scope=scope, cipher=cipher, llm=llm, verifier=TokenVerifier(jwt_secret=TEST_JWT_SECRET),
-                clinic=DEFAULT_CLINIC, limiter=RateLimiter())
+                clinic=DEFAULT_CLINIC, limiter=RateLimiter(), meta_app_secret=TEST_META_SECRET,
+                meta_verify_token="verify-me", lead_form_secret="lead-form-secret")
     return TestClient(create_app(deps))
 
 

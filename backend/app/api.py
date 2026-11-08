@@ -13,16 +13,24 @@ Supabase RLS repeats rules 3–4 inside the database for anyone who talks to
 Supabase directly with a browser token.
 """
 
+import hmac
+import json
 from contextlib import AbstractContextManager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta
 from typing import Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
+from app.acquisition import (IntakeError, LinkError, OutboxSender, ReplySender, claim_link, create_staff_referral,
+                             handle_comment, handle_lead_form, parse_comment_webhook, start_conversation, utcnow,
+                             verify_meta_signature)
 from app.auth import AuthError, AuthUnavailable, Principal, TokenVerifier, resolve_principal
+from app.channels import opening
+from app.leads import funnel, warm_leads
 from app.config import ClinicConfig
 from app.conversion import (ConsentChoices, ConversionError, SignupDetails, conversion_offer, convert,
                             current_consent, start_auth, update_consent)
@@ -57,6 +65,12 @@ class Deps:
     limiter: RateLimiter
     extractor_llm: SafeLLM | None = None
     cors_origins: tuple[str, ...] = ()
+    frontend_url: str = "http://localhost:5173"
+    meta_app_secret: str = ""          # verifies X-Hub-Signature-256 on comment webhooks
+    meta_verify_token: str = ""        # answers Meta's subscription handshake
+    lead_form_secret: str = ""         # shared secret header for the lead-form webhook
+    sender: ReplySender = field(default_factory=OutboxSender)
+    clock: Callable[[], datetime] = utcnow
 
 
 # ------------------------------------------------------------------ bodies
@@ -77,6 +91,21 @@ class Convert(BaseModel):
     data_sharing: bool
     marketing: bool = False
     exclude_memory_ids: list[str] = []
+
+
+class Claim(BaseModel):
+    token: str = Field(min_length=10, max_length=100)
+
+
+class Referral(BaseModel):
+    topic: str = Field(min_length=2, max_length=200)
+
+
+class LeadForm(BaseModel):
+    email: str = Field(max_length=254)
+    topic: str | None = Field(None, max_length=200)
+    marketing_consent: bool = False
+    form_id: str | None = Field(None, max_length=100)
 
 
 class ConsentChange(BaseModel):
@@ -160,6 +189,43 @@ def create_app(deps: Deps) -> FastAPI:
         rows = [c for c in repo.consents(patient_id) if c.kind == "data_sharing"]
         return bool(rows) and max(rows, key=lambda c: c.recorded_at).granted
 
+    # -------------------------------------------------------------- webhooks (no user; verified by secret)
+
+    @app.get("/webhooks/meta")
+    def meta_verify(request: Request):
+        q = request.query_params
+        if deps.meta_verify_token and q.get("hub.mode") == "subscribe" \
+                and hmac.compare_digest(q.get("hub.verify_token", ""), deps.meta_verify_token):
+            return PlainTextResponse(q.get("hub.challenge", ""))
+        raise HTTPException(403, "Verification failed")
+
+    @app.post("/webhooks/meta")
+    async def meta_comments(request: Request):
+        raw = await request.body()
+        if not verify_meta_signature(raw, request.headers.get("x-hub-signature-256"), deps.meta_app_secret):
+            raise HTTPException(401, "Bad signature")
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            raise HTTPException(400, "Bad JSON")
+        results = []
+        with deps.repo_scope() as repo:
+            for comment in parse_comment_webhook(payload):
+                results.append(handle_comment(repo, comment, deps.clinic, deps.frontend_url, deps.sender, deps.clock()))
+        return {"processed": len(results), "results": results}
+
+    @app.post("/webhooks/lead-form", status_code=201)
+    def lead_form(body: LeadForm, request: Request, repo: Repository = Depends(get_repo)):
+        given = request.headers.get("x-webhook-secret", "")
+        if not deps.lead_form_secret or not hmac.compare_digest(given, deps.lead_form_secret):
+            raise HTTPException(401, "Bad secret")
+        try:
+            link = handle_lead_form(repo, body.email, body.topic, body.marketing_consent, body.form_id,
+                                    deps.clinic, deps.frontend_url)
+        except IntakeError as exc:
+            raise HTTPException(422, str(exc))
+        return {"link": link}
+
     # -------------------------------------------------------------- public
 
     @app.get("/health")
@@ -189,11 +255,24 @@ def create_app(deps: Deps) -> FastAPI:
             # (Leaving it unset made sessions nobody could open.)
             guest_auth_user_id=None if who.patient_id else who.auth_user_id,
             patient_id=who.patient_id, converted_at=now() if who.patient_id else None)
-        greeting = (f"Hi, I'm Nightingale, {deps.clinic.name}'s assistant. Ask me anything about our services, "
-                    f"hours or what to expect. No sign-up needed.")
+        greeting, skip = start_conversation(repo, deps.cipher, session, deps.clinic, deps.clock())
         return {"session": {"id": session.id, "source_channel": session.source_channel,
                             "campaign_id": session.campaign_id, "stage": session.stage},
-                "greeting": greeting, "emergency_notice": emergency}
+                "greeting": {"id": greeting.id, "text": deps.cipher.decrypt(greeting.content_encrypted)},
+                "skip": skip, "emergency_notice": emergency}
+
+    @app.post("/sessions/claim")
+    def claim(body: Claim, who: Principal = Depends(principal), repo: Repository = Depends(get_repo)):
+        """Open a referral / comment / lead-form link: the conversation already knows why they came."""
+        if who.role == "staff":
+            raise HTTPException(403, "Staff can't claim patient links")
+        try:
+            session = claim_link(repo, deps.cipher, body.token, who.auth_user_id, who.patient_id, deps.clinic,
+                                 deps.clock())
+        except LinkError:
+            raise HTTPException(404, "This link has expired or was already used. You can still start a new chat.")
+        return {"session": {"id": session.id, "source_channel": session.source_channel, "stage": session.stage},
+                "skip": opening(session, deps.clinic, deps.clock()).skip, "emergency_notice": emergency}
 
     @app.post("/sessions/{session_id}/messages")
     def post_message(session_id: str, body: SendMessage, who: Principal = Depends(principal),
@@ -313,6 +392,23 @@ def create_app(deps: Deps) -> FastAPI:
         return {"escalations": out}
 
     # -------------------------------------------------------------- staff
+
+    @app.post("/staff/referrals", status_code=201)
+    def make_referral(body: Referral, who: Principal = Depends(staff_only), repo: Repository = Depends(get_repo)):
+        """'Asked about egg freezing at today's visit' -> a personal link that opens with that context."""
+        try:
+            link, session = create_staff_referral(repo, who.staff, body.topic, deps.clinic, deps.frontend_url)
+        except IntakeError as exc:
+            raise HTTPException(422, str(exc))
+        return {"link": link, "topic": session.referral_topic, "expires_at": session.expires_at}
+
+    @app.get("/staff/funnel")
+    def funnel_view(days: int = 30, who: Principal = Depends(staff_only), repo: Repository = Depends(get_repo)):
+        return funnel(repo, who.staff.clinic_id, deps.clock() - timedelta(days=max(1, min(days, 365))))
+
+    @app.get("/staff/leads")
+    def leads_view(who: Principal = Depends(staff_only), repo: Repository = Depends(get_repo)):
+        return warm_leads(repo, who.staff.clinic_id, deps.clock())
 
     @app.get("/staff/me")
     def staff_me(who: Principal = Depends(staff_only)):

@@ -48,7 +48,8 @@ def test_patient_a_cannot_fetch_patient_b_chat_history(api, world):
     assert api.post(f"/sessions/{world['b']}/messages", json={"text": "hi"},
                     headers=bearer(PATIENT_A)).status_code == 404
     mine = api.get(f"/sessions/{world['a']}/messages", headers=bearer(PATIENT_A))
-    assert mine.status_code == 200 and "Advil" in mine.json()["messages"][0]["text"]
+    patient_texts = [m["text"] for m in mine.json()["messages"] if m["sender"] == "patient"]
+    assert mine.status_code == 200 and "Advil" in patient_texts[0]
 
 
 def test_patient_cannot_fetch_clinician_triage_queue(api, world):
@@ -61,7 +62,8 @@ def test_staff_nurse_and_clinician_see_all_consented_patients(api, world):
         listed = {p["patient_id"] for p in api.get("/staff/patients", headers=bearer(token)).json()["patients"]}
         assert listed == {world["pa"]}  # B declined sharing, so B isn't listed
         thread = api.get(f"/staff/patients/{world['pa']}/messages", headers=bearer(token))
-        assert thread.status_code == 200 and thread.json()["messages"][0]["risk_level"] == "low"
+        first_patient = next(m for m in thread.json()["messages"] if m["sender"] == "patient")
+        assert thread.status_code == 200 and first_patient["risk_level"] == "low"
         assert api.get(f"/staff/patients/{world['pb']}/messages", headers=bearer(token)).status_code == 404
 
 

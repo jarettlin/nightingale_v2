@@ -37,6 +37,8 @@ class LeadSession:
     expires_at: str = field(default_factory=lambda: (datetime.now(timezone.utc) + timedelta(days=7)).isoformat())
     purged_at: str | None = None
     converted_at: str | None = None
+    referred_by: str | None = None          # staff member who made a referral link
+    resume_token_hash: str | None = None    # sha256 of the token in a referral/comment/lead-form link
 
     def attribution(self) -> dict:
         """What must survive to the patient record and every escalation."""
@@ -154,7 +156,12 @@ class Repository(Protocol):
     def escalation_queue(self, clinic_id: str) -> list[Escalation]: ...
     def add_clinician_response(self, response: ClinicianResponse) -> None: ...
     def clinician_responses(self, escalation_id: str) -> list[ClinicianResponse]: ...
-    def create_lead_session(self, **fields) -> LeadSession: ...
+    def create_lead_session(self, log_visit: bool = True, **fields) -> LeadSession: ...
+    def find_session_by_token_hash(self, token_hash: str) -> LeadSession | None: ...
+    def claim_session(self, lead_session_id: str, guest_auth_user_id: str) -> bool: ...
+    def recent_session_for_handle(self, platform: str, handle: str, since: str) -> LeadSession | None: ...
+    def lead_sessions(self, clinic_id: str, since: str) -> list[LeadSession]: ...
+    def funnel_rows(self, clinic_id: str, since: str) -> list[dict]: ...
     def get_lead_session(self, lead_session_id: str) -> LeadSession | None: ...
     def advance_stage(self, lead_session_id: str, stage: str) -> None: ...
     def set_lead_contact(self, contact: LeadContact) -> None: ...
@@ -166,6 +173,7 @@ class Repository(Protocol):
     def contact_points(self, patient_id: str) -> list[ContactPoint]: ...
     def add_consent(self, consent: Consent) -> None: ...
     def consents(self, patient_id: str) -> list[Consent]: ...
+    def lead_consents(self, lead_session_id: str) -> list[Consent]: ...
     def link_session_to_patient(self, lead_session_id: str, patient_id: str) -> None: ...
     def add_message(self, message: StoredMessage) -> StoredMessage: ...
     def list_messages(self, lead_session_id: str) -> list[StoredMessage]: ...
@@ -321,6 +329,9 @@ class InMemoryRepo:
     def consents(self, patient_id: str) -> list[Consent]:
         return [c for c in self.consent_rows if c.patient_id == patient_id]
 
+    def lead_consents(self, lead_session_id: str) -> list[Consent]:
+        return [c for c in self.consent_rows if c.lead_session_id == lead_session_id]
+
     def link_session_to_patient(self, lead_session_id: str, patient_id: str) -> None:
         session = self.sessions[lead_session_id]
         if session.patient_id not in (None, patient_id):
@@ -328,11 +339,40 @@ class InMemoryRepo:
         if session.patient_id is None:
             session.patient_id, session.converted_at = patient_id, now()
 
-    def create_lead_session(self, **fields) -> LeadSession:
+    def create_lead_session(self, log_visit: bool = True, **fields) -> LeadSession:
+        # log_visit=False for sessions prepared ahead (referral, comment, lead-form links):
+        # the visit is logged when the person actually opens the link
         session = LeadSession(id=str(uuid.uuid4()), **fields)
         self.sessions[session.id] = session
-        self.add_funnel_event(session.id, "visitor")
+        if log_visit:
+            self.add_funnel_event(session.id, "visitor")
         return session
+
+    def find_session_by_token_hash(self, token_hash: str) -> LeadSession | None:
+        return next((s for s in self.sessions.values() if s.resume_token_hash == token_hash), None)
+
+    def claim_session(self, lead_session_id: str, guest_auth_user_id: str) -> bool:
+        """Give an unowned, prepared session to the person who opened its link. First opener wins."""
+        s = self.sessions[lead_session_id]
+        if s.guest_auth_user_id is None and s.patient_id is None:
+            s.guest_auth_user_id = guest_auth_user_id
+            return True
+        return s.guest_auth_user_id == guest_auth_user_id
+
+    def recent_session_for_handle(self, platform: str, handle: str, since: str) -> LeadSession | None:
+        for sid, c in self.lead_contacts.items():
+            s = self.sessions.get(sid)
+            if (c.social_platform == platform and (c.social_handle or "").lower() == handle.lower()
+                    and s and s.landing_timestamp >= since):
+                return s
+        return None
+
+    def lead_sessions(self, clinic_id: str, since: str) -> list[LeadSession]:
+        return [s for s in self.sessions.values()
+                if s.clinic_id == clinic_id and s.purged_at is None and s.landing_timestamp >= since]
+
+    def funnel_rows(self, clinic_id: str, since: str) -> list[dict]:
+        return [e for e in self.funnel_events if e["clinic_id"] == clinic_id and e["created_at"] >= since]
 
     def get_lead_session(self, lead_session_id: str) -> LeadSession | None:
         return self.sessions.get(lead_session_id)

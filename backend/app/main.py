@@ -81,7 +81,11 @@ def build_app():
                              jwt_secret=os.environ.get("SUPABASE_JWT_SECRET") or None)
     origins = tuple(o.strip() for o in os.environ.get("FRONTEND_ORIGINS", "").split(",") if o.strip())
     return create_app(Deps(repo_scope=scope, cipher=cipher, llm=llm, extractor_llm=extractor,
-                           verifier=verifier, clinic=clinic, limiter=RateLimiter(), cors_origins=origins))
+                           verifier=verifier, clinic=clinic, limiter=RateLimiter(), cors_origins=origins,
+                           frontend_url=os.environ.get("FRONTEND_URL", "http://localhost:5173"),
+                           meta_app_secret=os.environ.get("META_APP_SECRET", ""),
+                           meta_verify_token=os.environ.get("META_VERIFY_TOKEN", ""),
+                           lead_form_secret=os.environ.get("LEAD_FORM_SECRET", "")))
 
 
 app = build_app()

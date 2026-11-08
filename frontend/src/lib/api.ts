@@ -80,8 +80,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 export const api = {
   clinic: () => request<ClinicInfo>('GET', '/clinic'),
   createSession: (params: { source?: string; campaign?: string; creative?: string; landing_page?: string }) =>
-    request<{ session: { id: string; source_channel: string }; greeting: string; emergency_notice: string }>(
-      'POST', '/sessions', params),
+    request<{ session: { id: string; source_channel: string }; greeting: { id: string; text: string };
+      skip: string[]; emergency_notice: string }>('POST', '/sessions', params),
+  claim: (token: string) =>
+    request<{ session: { id: string; source_channel: string }; skip: string[] }>('POST', '/sessions/claim', { token }),
   messages: (sid: string) => request<{ messages: ChatMessage[] }>('GET', `/sessions/${sid}/messages`),
   mySessions: () =>
     request<{ sessions: { id: string; source_channel: string; converted: boolean }[] }>('GET', '/me/sessions'),
@@ -98,6 +100,10 @@ export const api = {
 
   // ---- staff
   staffMe: () => request<{ role: string; clinical: boolean }>('GET', '/staff/me'),
+  makeReferral: (topic: string) =>
+    request<{ link: string; topic: string; expires_at: string }>('POST', '/staff/referrals', { topic }),
+  funnel: (days = 30) => request<Funnel>('GET', `/staff/funnel?days=${days}`),
+  leads: () => request<{ leads: Lead[]; clinical: Lead[] }>('GET', '/staff/leads'),
   queue: () => request<{ escalations: QueueItem[] }>('GET', '/staff/escalations'),
   review: (id: string) => request<ReviewPacket>('GET', `/staff/escalations/${id}`),
   setStatus: (id: string, status: string) =>
@@ -140,6 +146,26 @@ export type ReviewPacket = {
   }
   sources: Record<string, Source>
   responses: { author_id: string; created_at: string; text: string }[]
+}
+
+export type Funnel = {
+  steps: string[]
+  channels: Record<string, { counts: Record<string, number>; rates: Record<string, number | null> }>
+}
+
+export type Lead = {
+  lead_session_id: string
+  channel: string
+  identity_level: string
+  stage: string
+  last_activity: string
+  score: number
+  score_parts: { recency: number; stage: number; identity: number; channel: number }
+  concern: string | null
+  concern_source: string | null
+  converted: boolean
+  suggestion: string
+  priority?: string
 }
 
 export type PatientSummary = {

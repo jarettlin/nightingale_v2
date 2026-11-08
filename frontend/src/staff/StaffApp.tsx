@@ -3,6 +3,7 @@ import { api, ApiError, type QueueItem } from '../lib/api'
 import { clearDevToken, devToken } from '../lib/dev'
 import { supabase } from '../lib/supabase'
 import { EscalationDetail } from './EscalationDetail'
+import { LeadsView } from './LeadsView'
 import { PatientsView } from './PatientsView'
 import { REASONS, ago, due } from './format'
 
@@ -10,7 +11,7 @@ type Phase = 'loading' | 'signin' | 'check-email' | 'not-staff' | 'ready'
 
 export default function StaffApp() {
   const [phase, setPhase] = useState<Phase>('loading')
-  const [tab, setTab] = useState<'queue' | 'patients'>('queue')
+  const [tab, setTab] = useState<'queue' | 'patients' | 'leads'>('queue')
   const [queue, setQueue] = useState<QueueItem[]>([])
   const [selected, setSelected] = useState<string | null>(null)
   const [email, setEmail] = useState('')
@@ -118,6 +119,7 @@ export default function StaffApp() {
             Queue <span className="badge">{open.length}</span>
           </button>
           <button type="button" className={tab === 'patients' ? 'on' : ''} onClick={() => { setTab('patients'); setSelected(null) }}>Patients</button>
+          <button type="button" className={tab === 'leads' ? 'on' : ''} onClick={() => { setTab('leads'); setSelected(null) }}>Leads</button>
         </nav>
         <button type="button" className="link" onClick={signOut}>Sign out</button>
       </header>
@@ -151,7 +153,7 @@ export default function StaffApp() {
             ? <EscalationDetail id={selected} clinical={clinical} onChanged={loadQueue} onBack={() => setSelected(null)} />
             : <div className="detail"><p className="muted pad">Choose a request. The most urgent are at the top.</p></div>}
         </div>
-      ) : <PatientsView />}
+      ) : tab === 'patients' ? <PatientsView /> : <LeadsView />}
     </div>
   )
 }

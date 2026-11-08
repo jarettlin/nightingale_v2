@@ -58,6 +58,8 @@ def main():
     print("Nurse console:      ", f"{FRONTEND}/staff?dev_token={token(secret, 'demo-nurse', 'nurse@demo.example')}")
     print("Front-desk console: ", f"{FRONTEND}/staff?dev_token={token(secret, 'demo-front-desk', 'desk@demo.example')}")
     print("Patient (Mei):      ", f"{FRONTEND}/?dev_token={token(secret, 'demo-patient-mei', 'mei.demo@example.com')}")
+    print("New visitor token:  ", token(secret, "demo-guest", None, anonymous=True))
+    print("  (open a referral link as a new visitor: <link>?dev_token=<new visitor token>)")
     print()
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")
 

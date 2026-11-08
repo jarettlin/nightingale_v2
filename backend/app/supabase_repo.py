@@ -23,7 +23,7 @@ from app.repository import (ClinicianResponse, Consent, ContactPoint, Escalation
 
 LEAD_FIELDS = ["id", "clinic_id", "source_channel", "identity_level", "campaign_id", "creative",
                "landing_page", "referral_topic", "guest_auth_user_id", "patient_id", "stage",
-               "landing_timestamp", "expires_at", "purged_at", "converted_at"]
+               "landing_timestamp", "expires_at", "purged_at", "converted_at", "referred_by", "resume_token_hash"]
 MESSAGE_FIELDS = ["id", "lead_session_id", "sender", "sent_as", "content_encrypted", "content_redacted",
                   "redaction_ok", "redaction_entities", "risk_level", "risk_reason", "risk_confidence",
                   "risk_source", "risk_assessed_at", "risk_rule_codes", "intents", "escalation_required",
@@ -90,7 +90,7 @@ class SupabaseRepo:
     def __init__(self, conn: psycopg.Connection):
         self.conn = conn
 
-    def create_lead_session(self, **fields) -> LeadSession:
+    def create_lead_session(self, log_visit: bool = True, **fields) -> LeadSession:
         cols = list(fields)
         row = self.conn.execute(
             f"""insert into public.lead_session ({", ".join(cols)})
@@ -98,8 +98,46 @@ class SupabaseRepo:
                 returning {", ".join(LEAD_FIELDS)}""",
             tuple(fields.values())).fetchone()
         session = LeadSession(**_str(row))
-        self.add_funnel_event(session.id, "visitor")
+        if log_visit:
+            self.add_funnel_event(session.id, "visitor")
         return session
+
+    def find_session_by_token_hash(self, token_hash: str) -> LeadSession | None:
+        row = self.conn.execute(f"select {', '.join(LEAD_FIELDS)} from public.lead_session where resume_token_hash = %s",
+                                (token_hash,)).fetchone()
+        return LeadSession(**_str(row)) if row else None
+
+    def claim_session(self, lead_session_id: str, guest_auth_user_id: str) -> bool:
+        row = self.conn.execute(
+            """update public.lead_session set guest_auth_user_id = %s, last_active_at = now()
+               where id = %s and guest_auth_user_id is null and patient_id is null returning id""",
+            (guest_auth_user_id, lead_session_id)).fetchone()
+        if row:
+            return True
+        owner = self.conn.execute("select guest_auth_user_id from public.lead_session where id = %s",
+                                  (lead_session_id,)).fetchone()
+        return bool(owner) and str(owner["guest_auth_user_id"]) == guest_auth_user_id
+
+    def recent_session_for_handle(self, platform: str, handle: str, since: str) -> LeadSession | None:
+        row = self.conn.execute(
+            f"""select {', '.join('l.' + f for f in LEAD_FIELDS)} from public.lead_session l
+                join public.lead_contact c on c.lead_session_id = l.id
+                where c.social_platform = %s and lower(c.social_handle) = lower(%s) and l.landing_timestamp >= %s
+                order by l.landing_timestamp desc limit 1""", (platform, handle, since)).fetchone()
+        return LeadSession(**_str(row)) if row else None
+
+    def lead_sessions(self, clinic_id: str, since: str) -> list[LeadSession]:
+        rows = self.conn.execute(
+            f"""select {', '.join(LEAD_FIELDS)} from public.lead_session
+                where clinic_id = %s and purged_at is null and landing_timestamp >= %s
+                order by landing_timestamp desc""", (clinic_id, since)).fetchall()
+        return [LeadSession(**_str(r)) for r in rows]
+
+    def funnel_rows(self, clinic_id: str, since: str) -> list[dict]:
+        rows = self.conn.execute(
+            """select lead_session_id, source_channel, event, value_kind, created_at from public.funnel_event
+               where clinic_id = %s and created_at >= %s""", (clinic_id, since)).fetchall()
+        return [_str(r) for r in rows]
 
     def get_lead_session(self, lead_session_id: str) -> LeadSession | None:
         # Check the shape in Python: a SQL cast error would abort the request's transaction
@@ -227,6 +265,12 @@ class SupabaseRepo:
         rows = self.conn.execute(
             """select clinic_id, kind, granted, policy_version, patient_id, lead_session_id, recorded_at
                from public.consent where patient_id = %s order by recorded_at""", (patient_id,)).fetchall()
+        return [Consent(**_str(r)) for r in rows]
+
+    def lead_consents(self, lead_session_id: str) -> list[Consent]:
+        rows = self.conn.execute(
+            """select clinic_id, kind, granted, policy_version, patient_id, lead_session_id, recorded_at
+               from public.consent where lead_session_id = %s order by recorded_at""", (lead_session_id,)).fetchall()
         return [Consent(**_str(r)) for r in rows]
 
     def link_session_to_patient(self, lead_session_id: str, patient_id: str) -> None:

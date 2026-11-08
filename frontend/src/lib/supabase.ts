@@ -21,8 +21,14 @@ async function signIn() {
 /** A signed-in user, anonymous if needed: guests get value before any sign-up.
  *  Shared promise, so two callers at once can't create two anonymous users. */
 export function ensureUser() {
-  // Dev-build demo sign-in: no Supabase session needed (see lib/dev.ts)
-  if (devToken()) return Promise.resolve({ user: { is_anonymous: false } } as Awaited<ReturnType<typeof signIn>>)
+  // Dev-build demo sign-in: no Supabase session needed (see lib/dev.ts). Read whether the demo
+  // user is anonymous from the token itself, or a new visitor looks signed-in mid sign-up.
+  const dev = devToken()
+  if (dev) {
+    let anonymous = false
+    try { anonymous = Boolean(JSON.parse(atob(dev.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).is_anonymous) } catch { /* malformed */ }
+    return Promise.resolve({ user: { is_anonymous: anonymous } } as Awaited<ReturnType<typeof signIn>>)
+  }
   pending ??= signIn().finally(() => { pending = null })
   return pending
 }

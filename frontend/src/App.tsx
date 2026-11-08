@@ -32,13 +32,15 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [fatal, setFatal] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
 
   const startNewSession = useCallback(async () => {
     const created = await api.createSession(arrivalParams())
     store.set('session', created.session.id)
     setSessionId(created.session.id)
-    setMessages([])
+    // The greeting comes from channel_rules.yaml on the server, and is stored as the first message
+    setMessages([{ id: created.greeting.id, sender: 'assistant', text: created.greeting.text }])
   }, [])
 
   // Boot: sign in (anonymously if needed), then resume the last conversation or start one.
@@ -52,6 +54,20 @@ export default function App() {
         const session = await ensureUser()
         setIsAnonymous(session.user.is_anonymous ?? false)
         setClinic(await api.clinic())
+
+        // A personal link (/r/<token>) from a staff referral, a comment reply or a lead form:
+        // claim the conversation prepared for them, which already knows why they came
+        const link = window.location.pathname.match(/^\/r\/([\w-]+)/)
+        if (link) {
+          window.history.replaceState(null, '', '/')   // keep the token out of the address bar
+          try {
+            const claimed = await api.claim(link[1])
+            store.set('session', claimed.session.id)
+          } catch {
+            setNotice('That link has expired or was already used, but you can still ask anything here.')
+          }
+        }
+
         // Resume by asking the server what this user owns, not by what this browser
         // remembers: the email link often opens in another browser, and must land on the
         // same conversation. The id saved on this device only decides which one, if several.
@@ -165,8 +181,8 @@ export default function App() {
 
   const lastAssistant = [...messages].reverse().find((m) => m.sender === 'assistant')
   const facts = profileCount(profile)
-  // Always first, for new and resumed conversations alike (it isn't stored server-side)
-  const greeting: ChatMessage = {
+  // Conversations from before greetings were stored have none: show a generic one so the thread never starts cold
+  const fallbackGreeting: ChatMessage | null = messages[0]?.sender === 'assistant' ? null : {
     id: 'greeting', sender: 'assistant',
     text: `Hi, I'm Nightingale, ${clinic?.name ?? 'the clinic'}'s assistant. Ask me anything about our services, `
       + 'hours or what to expect. No sign-up needed.',
@@ -192,7 +208,8 @@ export default function App() {
       )}
 
       <main className="thread" aria-live="polite">
-        {clinic && <MessageBubble message={greeting} />}
+        {notice && <MessageBubble message={{ id: 'notice', sender: 'system', text: notice }} />}
+        {clinic && fallbackGreeting && <MessageBubble message={fallbackGreeting} />}
         {messages.map((m) => (
           <div key={m.id} id={`m-${m.id}`}>
             <MessageBubble message={m} sending={escalating}

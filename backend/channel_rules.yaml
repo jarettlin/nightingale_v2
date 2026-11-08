@@ -1,0 +1,81 @@
+# How Nightingale opens a conversation: channel × identity_level × time_of_day.
+#
+# One file, read top to bottom. The first rule whose `when` matches AND whose
+# placeholders can all be filled sets the greeting. A time_of_day note is then
+# added. `skip` lists details this person has already given us, which must never
+# be asked for again.
+#
+# Placeholders: {clinic} {topic} {next_open} {link}
+# Changing wording or adding a channel is an edit here, not a code change.
+
+clinic_hours:
+  timezone: Asia/Kuala_Lumpur
+  # 0 = Monday … 6 = Sunday; missing day = closed
+  open:
+    0: ["08:30", "17:30"]
+    1: ["08:30", "17:30"]
+    2: ["08:30", "17:30"]
+    3: ["08:30", "17:30"]
+    4: ["08:30", "17:30"]
+    5: ["09:00", "13:00"]
+
+# Ad campaign ids -> what the person was looking at
+campaign_topics:
+  ivf_over40: IVF after 40
+  amh_test: AMH testing
+  egg_freezing: egg freezing
+  smoke_test: our services
+
+rules:
+  - id: staff_referral
+    when: {channel: staff_referral}
+    greeting: >-
+      Hi, welcome. Our team mentioned you asked about {topic}, so we can pick up right there. What would you
+      like to know?
+    skip: [topic]
+
+  - id: social_comment
+    when: {channel: [instagram_comment, tiktok_comment, facebook_comment]}
+    greeting: >-
+      Thanks for your comment. This is a private space, so you can ask anything about {topic} here. Nothing you
+      write here is public.
+    private_reply: >-
+      Thanks for your comment! If you'd like to talk privately about {topic}, our assistant can answer
+      straight away, with no sign-up: {link}
+
+  - id: social_comment_no_topic
+    when: {channel: [instagram_comment, tiktok_comment, facebook_comment]}
+    greeting: Thanks for your comment. This is a private space, so ask anything here. Nothing you write here is public.
+    private_reply: >-
+      Thanks for your comment! If you'd like to talk privately, our assistant can answer straight away, with no
+      sign-up: {link}
+
+  - id: identified_lead
+    when: {identity_level: email}
+    greeting: >-
+      Thanks for getting in touch about {topic}. You don't need to fill anything in again: just ask away.
+    skip: [email]
+
+  - id: identified_lead_no_topic
+    when: {identity_level: email}
+    greeting: Thanks for getting in touch. You don't need to fill anything in again; just ask away.
+    skip: [email]
+
+  - id: ad_click
+    when: {channel: [instagram_ad_click, google_ad_click]}
+    greeting: Hi, I'm Nightingale, {clinic}'s assistant. Curious about {topic}? Ask me anything, no sign-up needed.
+
+  - id: review_reply
+    when: {channel: google_reviews}
+    greeting: Hi, thanks for finding us through our reviews. Ask me anything about {clinic}, no sign-up needed.
+
+  - id: default
+    when: {}
+    greeting: >-
+      Hi, I'm Nightingale, {clinic}'s assistant. Ask me anything about our services, hours or what to expect.
+      No sign-up needed.
+
+time_of_day:
+  after_hours: >-
+    Our nurses are offline right now and back {next_open}. I can still answer general questions, and anything
+    you send to the clinic will be waiting for them.

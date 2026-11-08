@@ -104,3 +104,20 @@ code { font-size: 13px; }
   .split:not(.has-detail) .detail { display: none; }
   .detail .back { display: inline-block; }
 }
+
+/* leads */
+.leads-page { padding: 16px; display: flex; flex-direction: column; gap: 12px; max-width: 1000px; width: 100%; margin: 0 auto; }
+.referral-form { display: flex; flex-direction: column; gap: 4px; }
+.link-box { margin-top: 10px; padding: 10px; border-radius: 10px; background: var(--brand-soft); }
+.link-box code { display: block; word-break: break-all; margin-bottom: 8px; }
+.link-box button { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 999px; padding: 6px 14px; }
+.table-wrap { overflow-x: auto; }
+.funnel { border-collapse: collapse; width: 100%; font-size: 14px; }
+.funnel th, .funnel td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.funnel thead th { font-size: 12px; color: var(--muted); font-weight: 600; }
+.leads { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.lead { padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); display: flex; flex-direction: column; gap: 4px; }
+.lead-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.score { min-width: 34px; text-align: center; padding: 2px 8px; border-radius: 999px; background: var(--brand); color: var(--brand-ink); font-weight: 700; font-size: 13px; }
+.suggestion { font-size: 13.5px; }
+.suggestion.clinical { color: var(--high); font-weight: 600; }
