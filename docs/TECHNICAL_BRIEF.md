@@ -102,6 +102,14 @@ ratings flag where a lawyer should be consulted.
   find the injections painless" shares almost every word with its source and passes the rules, but the
   checker drops it. It kept every correct sentence across 5 repeats and 10 real questions, for 0.8–1.4 s
   extra per answer.
+- **Answer rate:** 10 answerable-looking questions × 3 runs on real OpenAI went from 21/30 to **27/30**
+  answered. The 3 left are "is IVF painful?", which the clinic's documents don't cover, so refusing is
+  right. The false rejections had three causes: a "welcome **but not** required" source sentence read as
+  wholly negative; facts the model left uncited while citing only its "contact the clinic" closing line; and
+  that closing line itself. Loosening was paired with tightening: a referral or small-talk line may only
+  use referral words and the patient's own words. Testing found "You can book with the clinic team today
+  and success is guaranteed" slipping through as small talk (an older hole, and the model checker passed it
+  too); all 8 deliberately bad replies are now blocked.
 - **Latency:** about **3 s per message** end to end in the live app (3.0, 3.1 and 2.3 s measured), down
   from 5.4 s. Database time per message went from 1.2 s to 0.34 s: memory is read once per request instead
   of five times, the session isn't looked up twice, and the writes go out together in one batch (Postgres
@@ -111,6 +119,8 @@ ratings flag where a lawyer should be consulted.
   stalls for ~7 s on maybe 1 call in 4, and then the offline rules save the facts instead. The risk check is
   never skipped, so a stalled risk call still delays the reply. Before per-call timeouts, one stalled call
   took 18 s.
+- **Tests:** 301 backend tests, including a Supabase round trip of every feature and RLS on the backend's own
+  reads, plus 32 RLS checks on PGlite.
 
 ## 6. Trade-offs and what we cut
 

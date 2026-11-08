@@ -298,3 +298,54 @@ class _Router:
         if system == VERIFY_SYSTEM:
             return self.checker.complete(system, user, timeout_s, json_mode)
         return self.reply
+
+
+# ------------------------------------------------------------- false rejections found in real replies
+
+def test_a_clause_agrees_with_the_matching_half_of_a_but_not_source():
+    # Source: "A GP referral is welcome but not required..." Rejected live, although correct.
+    src = sources("do I need a referral?")
+    n = next(i for i, c in enumerate(src, 1) if "referral" in c.text)
+    reply = f"You do not need a GP referral to book a first consultation, although a referral is welcome [S{n}]."
+    assert check_reply(reply, src).grounded
+    flipped = f"You need a GP referral to book a first consultation [S{n}]."
+    assert not check_reply(flipped, src).grounded                       # the real flip is still caught
+
+
+def test_an_uncited_sentence_the_sources_support_gets_its_citation():
+    # Live: the model cited only its closing line, so the supported facts had no marker
+    src = sources("we've been trying for a year, what should we do?")
+    reply = ("Since you have been trying to conceive for a year, it is usually recommended to seek a fertility "
+             "assessment at this point. You may want to contact the clinic team for further guidance and next steps. [S1]")
+    g = check_reply(reply, src, patient_text="we've been trying for a year")
+    assert g.grounded and g.dropped == 0
+    assert g.text.startswith("Since you have been trying") and "assessment at this point. [S1]" in g.text
+    assert g.text.endswith("for further guidance and next steps.")      # kept, its wrong marker removed
+
+
+def test_pointing_to_the_clinic_is_kept_but_never_carries_a_fact_or_number():
+    src = sources("what services do you offer?")
+    offer = next(n for n, c in enumerate(src, 1) if c.heading == "Services we offer")
+    base = f"We offer egg freezing, IVF and IUI. [S{offer}] "
+    assert "contact the clinic team" in check_reply(base + "You can contact the clinic team to book.", src).text
+    assert "50%" not in check_reply(base + "Contact the clinic team for a 50% discount.", src).text
+    alone = check_reply("Please contact the clinic team to discuss your options.", src)
+    assert not alone.grounded                                           # a referral alone isn't an answer
+
+
+def test_the_claim_checker_still_reviews_referral_lines():
+    src = sources("what services do you offer?")
+    offer = next(n for n, c in enumerate(src, 1) if c.heading == "Services we offer")
+    reply = f"We offer egg freezing, IVF and IUI. [S{offer}] You may want to contact the clinic team to discuss your options."
+    checker = Checker({1: True, 2: False})
+    g = verify_claims(check_reply(reply, src), src, SafeLLM(checker))
+    assert "2. You may want to contact the clinic team" in checker.prompts[0]["user"] and "contact" not in g.text
+
+
+def test_a_referral_line_cannot_smuggle_in_a_promise():
+    # Found by testing with the real checker, which passed this line
+    src = sources("what services do you offer?")
+    offer = next(n for n, c in enumerate(src, 1) if c.heading == "Services we offer")
+    g = check_reply(f"We offer egg freezing, IVF and IUI. [S{offer}] "
+                    "You can book with the clinic team today and success is guaranteed.", src)
+    assert "guaranteed" not in g.text and g.dropped == 1

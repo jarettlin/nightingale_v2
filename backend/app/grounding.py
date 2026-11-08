@@ -8,7 +8,8 @@ Each sentence of the reply is kept only if it is supported:
     or in what the patient said ("since you're 38" echoes them, it isn't a claim)
   * enough of its content words must appear in the cited source(s)
   * a sentence with no marker survives only if it's plainly conversational
-    ("Happy to help!") or clearly drawn from one of the sources
+    ("Happy to help!"), only points the patient to the clinic team, or passes
+    the same check against one source (it then gets that source's citation)
 If no cited sentence survives, the reply is not grounded and the caller
 replaces it with an honest "I don't have that information".
 
@@ -36,6 +37,30 @@ CONVERSATIONAL = re.compile(
     r"^(thank|thanks|glad|happy to help|i hope|hope this|feel free|let me know|if you('d| would) like|"
     r"you can (tap|send|ask|continue|book)|is there anything|please|great question|good question)", re.I)
 MIN_OVERLAP = 0.4
+# "You may want to contact the clinic team for next steps": pointing someone to the
+# clinic isn't a claim about the clinic. Kept without a citation, still checked by
+# the model claim check (in case it smuggles in a fact), never with a number.
+REFER_TO_CLINIC = re.compile(
+    r"\b(contact|consult|discuss|reach out|speak|talk|ask|schedul\w*|book\w*|send)\b.*"
+    r"\b(clinic|team|doctor|nurse|specialist)\b", re.I)
+MAX_REFERRAL_WORDS = 30
+# A referral line may only use these words, plus the patient's own words. (Source
+# words aren't allowed: one source mentions success rates, which let "success is
+# guaranteed" through.) Found by testing: "Book with the clinic team today and
+# success is guaranteed" looked like a referral, and the model checker passed it.
+REFERRAL_WORDS = set(tokens(
+    "contact contacting consult consulting discuss discussing reach out speak talk ask asking schedule scheduling "
+    "book booking send sending clinic clinic's team doctor doctors nurse nurses specialist "
+    "further guidance next step steps advice personal personalised personalized tailored specific detail details "
+    "situation options option questions question concerns concern information appointment consultation "
+    "want might may could would best recommend recommended consider help helpful happy directly today soon "
+    "sooner more about your you them it this that any if have"))
+# Small talk ("Happy to help!", "You can tap Send to Clinic") gets the same treatment:
+# "You can book with the clinic team today and success is guaranteed" matched the
+# small-talk pattern and skipped every check.
+SMALL_TALK_WORDS = REFERRAL_WORDS | set(tokens(
+    "thank thanks glad happy help hope feel free let know like anything else please great good "
+    "tap continue securely here there keep going share sharing message"))
 
 
 @dataclass
@@ -138,13 +163,17 @@ def _supported(claim: str, chunks: list[Chunk], patient_numbers: frozenset[str] 
     # Same words, opposite meaning: "We offer sperm freezing" vs "We do not offer
     # sperm freezing". Checked per clause, because one sentence often joins a
     # "we don't" and a "we can": "We don't offer X, but we can refer you".
-    source_sentences = [s for c in chunks for s in re.split(r"(?<=[.!?])\s+", c.text)]
+    # The source is split into clauses too: "A GP referral is welcome but not required"
+    # holds a positive and a negative claim, and "it is welcome" agrees with the first.
+    source_sentences = [clause for c in chunks for s in re.split(r"(?<=[.!?])\s+", c.text)
+                        for clause in CLAUSE_BREAK.split(s) if clause.strip()]
     return all(_polarity_ok(clause, source_sentences) for clause in CLAUSE_BREAK.split(claim) if clause.strip())
 
 
 def check_reply(reply: str, sources: list[Chunk], patient_text: str = "") -> GroundedReply:
     by_marker = {str(n): chunk for n, chunk in enumerate(sources, 1)}
     patient_numbers = frozenset(_numbers(patient_text))
+    allowed = set(tokens(patient_text))   # a referral may echo the patient ("concerns about IVF"), nothing else
     kept: list[KeptSentence] = []
     dropped = 0
 
@@ -156,16 +185,29 @@ def check_reply(reply: str, sources: list[Chunk], patient_text: str = "") -> Gro
         if markers:
             if valid and _supported(claim, [by_marker[m] for m in valid], patient_numbers):
                 kept.append(KeptSentence(claim + "".join(f" [S{m}]" for m in valid), claim, valid))
+            elif _is_referral(claim, allowed):
+                kept.append(KeptSentence(claim, claim, []))   # its marker was wrong, the advice isn't
             else:
                 dropped += 1
-        elif CONVERSATIONAL.match(claim) and not _numbers(claim):
+        elif CONVERSATIONAL.match(claim) and not _numbers(claim) \
+                and set(tokens(claim)) <= SMALL_TALK_WORDS | GENERIC | allowed:
             kept.append(KeptSentence(claim, claim, [], conversational=True))
-        elif any(_supported(claim, [c], patient_numbers) for c in sources):
+        elif supporting := next((m for m, c in by_marker.items() if _supported(claim, [c], patient_numbers)), None):
+            # Models often cite only their last sentence. A sentence that passes the same
+            # check a cited one must pass gets the citation it should have had.
+            kept.append(KeptSentence(f"{claim} [S{supporting}]", claim, [supporting]))
+        elif _is_referral(claim, allowed):
             kept.append(KeptSentence(claim, claim, []))
         else:
             dropped += 1
 
     return _assemble(kept, by_marker, dropped)
+
+
+def _is_referral(claim: str, allowed: set[str]) -> bool:
+    if not REFER_TO_CLINIC.search(claim) or _numbers(claim) or len(claim.split()) > MAX_REFERRAL_WORDS:
+        return False
+    return set(tokens(claim)) <= REFERRAL_WORDS | GENERIC | allowed
 
 
 def _assemble(kept: list[KeptSentence], by_marker: dict[str, Chunk], dropped: int,
@@ -184,9 +226,11 @@ For each numbered statement, decide if it is SUPPORTED: everything it says is st
 or it only repeats what the patient said. Rewording and summarising are fine.
 
 It is NOT supported if it adds anything the sources don't state: a fact, number, service, price,
-promise, timeframe or medical advice, even if it is true in general. Also not supported if it
+promise, guarantee, outcome, timeframe or medical advice, even if it is true in general. Also not supported if it
 changes the meaning: "usually" becomes "always", a condition or a "not" is dropped, or a general
 fact is turned into a prediction for this patient. Use only the sources, never outside knowledge.
+Suggesting that the patient contact, ask or book with the clinic team is supported, as long as it
+adds no fact or promise of its own.
 
 Return only JSON: {"results": [{"n": 1, "supported": true}, {"n": 2, "supported": false}]}"""
 

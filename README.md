@@ -57,7 +57,7 @@ cd frontend && npm run dev
 ## Tests
 
 ```bash
-cd backend && .venv/bin/pytest -q                 # 296 tests; Supabase ones run when DATABASE_URL is set
+cd backend && .venv/bin/pytest -q                 # 301 tests; Supabase ones run when DATABASE_URL is set
 cd supabase/tests && npm install && npm run check # RLS policies on an in-memory Postgres (32 checks)
 cd backend && .venv/bin/python scripts/eval_risk.py --runs 3   # risk gate vs 52 labelled messages (uses OpenAI)
 cd backend && .venv/bin/python scripts/smoke_auth.py           # real Supabase anonymous sign-in against a running API
