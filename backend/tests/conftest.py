@@ -16,8 +16,8 @@ class RoutingLLM:
         self.answer = answer
         self.prompts: list[dict] = []
 
-    def complete(self, system: str, user: str, timeout_s: float = 10.0) -> str:
-        self.prompts.append({"system": system, "user": user})
+    def complete(self, system: str, user: str, timeout_s: float = 10.0, json_mode: bool = False) -> str:
+        self.prompts.append({"system": system, "user": user, "json_mode": json_mode})
         if system == RISK_SYSTEM:
             return json.dumps({"risk_level": "low", "reason": "test", "confidence": "high"})
         return self.answer

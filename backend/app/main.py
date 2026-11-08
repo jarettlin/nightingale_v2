@@ -16,7 +16,7 @@ from app.api import Deps, create_app
 from app.auth import TokenVerifier
 from app.config import DEFAULT_CLINIC, ClinicConfig
 from app.crypto import Cipher
-from app.llm import SafeLLM, UnconfiguredLLM
+from app.llm import OpenAIClient, SafeLLM, UnconfiguredLLM
 from app.ratelimit import RateLimiter
 
 load_dotenv(Path(__file__).parent.parent / ".env")
@@ -68,10 +68,19 @@ def build_app():
         clinic = DEFAULT_CLINIC
         logging.warning("DATABASE_URL not set: using in-memory storage (data is lost on restart)")
 
+    if api_key := os.environ.get("OPENAI_API_KEY"):
+        model = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
+        llm = SafeLLM(OpenAIClient(api_key, model))
+        extractor = llm
+        logging.info(f"LLM: OpenAI {model}")
+    else:
+        llm, extractor = SafeLLM(UnconfiguredLLM()), None
+        logging.warning("OPENAI_API_KEY not set: running in safe fallback mode (templates, rules-only risk)")
+
     verifier = TokenVerifier(supabase_url=os.environ.get("SUPABASE_URL") or None,
                              jwt_secret=os.environ.get("SUPABASE_JWT_SECRET") or None)
     origins = tuple(o.strip() for o in os.environ.get("FRONTEND_ORIGINS", "").split(",") if o.strip())
-    return create_app(Deps(repo_scope=scope, cipher=cipher, llm=SafeLLM(UnconfiguredLLM()),
+    return create_app(Deps(repo_scope=scope, cipher=cipher, llm=llm, extractor_llm=extractor,
                            verifier=verifier, clinic=clinic, limiter=RateLimiter(), cors_origins=origins))
 
 

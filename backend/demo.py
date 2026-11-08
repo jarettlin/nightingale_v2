@@ -23,7 +23,7 @@ class EchoLLM:
     def __init__(self, down: bool = False):
         self.down = down
 
-    def complete(self, system: str, user: str, timeout_s: float = 10.0) -> str:
+    def complete(self, system: str, user: str, timeout_s: float = 10.0, json_mode: bool = False) -> str:
         if self.down:
             raise LLMUnavailable("simulated outage")
         print(f"  → model received: {user!r}")
