@@ -115,7 +115,7 @@ def test_escalation_round_trip_on_supabase(db_repo, clinic_id, llm, cipher):
 
     db_repo.update_escalation(stored.id, "acknowledged")
     assert db_repo.get_escalation(stored.id).status == "acknowledged"
-    assert [e.id for e in db_repo.escalation_queue(clinic_id)] == [stored.id]
+    assert stored.id in [e.id for e in db_repo.escalation_queue(clinic_id)]   # real escalations may be queued too
 
 
 def test_citations_are_stored_on_supabase(db_repo, clinic_id, llm, cipher):
@@ -163,3 +163,65 @@ def test_channels_round_trip_on_supabase(db_repo, clinic_id, cipher):
 def test_unknown_session_id_is_none(db_repo):
     assert db_repo.get_lead_session("not-a-uuid") is None
     assert db_repo.get_lead_session("00000000-0000-0000-0000-000000000000") is None
+
+
+# ------------------------------------------------------------------ RLS on the backend's own reads
+
+def _auth_user(db_repo, anonymous=False) -> str:
+    import uuid
+    uid = str(uuid.uuid4())
+    db_repo.conn.execute("insert into auth.users (id, aud, role, is_anonymous) values (%s, 'authenticated', 'authenticated', %s)",
+                         (uid, anonymous))
+    return uid
+
+
+def test_backend_reads_are_filtered_by_rls_even_without_python_checks(db_repo, clinic_id, llm, cipher):
+    """read_as() is the second lock: these calls skip every ownership check in the API
+    on purpose, and the database still only returns what that person may see."""
+    from app.conversion import ConsentChoices, SignupDetails, convert
+    from app.memory import profile
+    from app.pipeline import handle_patient_message
+
+    owner, intruder, nurse = _auth_user(db_repo, anonymous=True), _auth_user(db_repo, anonymous=True), _auth_user(db_repo)
+    db_repo.conn.execute("insert into public.staff_member (auth_user_id, clinic_id, role, display_name) "
+                         "values (%s, %s, 'nurse', 'Test Nurse')", (nurse, clinic_id))
+    session = db_repo.create_lead_session(clinic_id=clinic_id, source_channel="direct",
+                                          identity_level="anonymous", guest_auth_user_id=owner)
+    handle_patient_message(db_repo, llm, cipher, session.id, "I take Advil")
+
+    def seen_by(uid):
+        with db_repo.read_as(uid):
+            return (len(db_repo.list_messages(session.id)),
+                    len(profile(db_repo.memory_store(session.id)).get("medication", [])))
+
+    assert seen_by(owner) == (2, 1)
+    assert seen_by(intruder) == (0, 0)          # another guest: nothing, even with the exact session id
+    assert seen_by(nurse) == (0, 0)             # staff: not before the patient converts and consents
+
+    convert(db_repo, cipher, session.id, SignupDetails(owner, "rls@example.com", "2026-11-08T10:00:00+00:00", "+60123456781"),
+            ConsentChoices(data_sharing=False))
+    everything = seen_by(owner)
+    assert everything[0] >= 2 and everything[1] == 1   # same auth user after conversion: still theirs
+    assert seen_by(nurse) == (0, 0)             # converted but declined sharing
+
+    patient_id = db_repo.get_lead_session(session.id).patient_id
+    from app.conversion import update_consent
+    update_consent(db_repo, patient_id, clinic_id, session.id, data_sharing=True, marketing=False)
+    assert seen_by(nurse) == seen_by(owner) == everything   # consent given: now the clinic sees the same
+
+
+def test_read_as_switches_back_and_survives_errors(db_repo):
+    import psycopg
+    who = lambda: db_repo.conn.execute("select current_user as u").fetchone()["u"]
+    owner_role = who()
+    uid = _auth_user(db_repo, anonymous=True)
+
+    with db_repo.read_as(uid):
+        assert who() == "authenticated"
+    assert who() == owner_role                  # the owner role is back for the writes that follow
+
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with db_repo.read_as(uid):
+            db_repo.conn.execute("select * from public.audit_log")   # no grant for users at all
+    assert who() == owner_role                  # the failed read didn't poison the request's transaction
+    db_repo.add_audit("system", "still_works")

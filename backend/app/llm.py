@@ -23,12 +23,12 @@ class LLMUnavailable(Exception):
 
 
 # Calls whose answer the server parses, so the model must return a JSON object
-JSON_PURPOSES = {"risk", "extract"}
+JSON_PURPOSES = {"risk", "extract", "verify"}
 
 # Per-attempt timeouts. Normal calls take ~1–1.5s; a stalled request is cut
 # short and retried once instead of making the patient wait 15s. Worst case is
 # about two attempts, then the safe fallback for that step.
-TIMEOUTS = {"risk": 5.0, "reply": 8.0, "extract": 6.0}
+TIMEOUTS = {"risk": 5.0, "reply": 8.0, "extract": 6.0, "verify": 5.0}
 DEFAULT_TIMEOUT = 8.0
 
 

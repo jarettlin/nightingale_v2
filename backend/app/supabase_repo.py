@@ -1,8 +1,8 @@
 """Repository backed by the Supabase Postgres tables (see supabase/migrations).
 
 The backend connects as the database owner, which bypasses RLS: that's the
-"only the backend writes" half of the design. Reads on behalf of a user will
-go through `as_user()` so RLS applies to them (used by the API layer).
+"only the backend writes" half of the design. Reads that return someone's
+content go through `read_as()`, so RLS applies to them as well.
 
 The repo never commits. The caller owns the transaction: one per request in
 the API, and a rolled-back one in the integration test.
@@ -388,10 +388,22 @@ class SupabaseRepo:
         return [ClinicianResponse(**_str(r)) for r in rows]
 
     @contextmanager
-    def as_user(self, auth_user_id: str):
-        """Run reads as this Supabase user so RLS decides what they see."""
+    def read_as(self, auth_user_id: str):
+        """Run the reads inside this block as that Supabase user, so the RLS policies
+        decide which rows come back, exactly as for a browser holding their token.
+
+        This is the second lock behind the ownership checks in the API: if a Python
+        check were ever wrong, the database still returns nothing that isn't theirs.
+        Writes stay outside (clients have no write grants by design)."""
         claims = json.dumps({"sub": auth_user_id, "role": "authenticated"})
-        with self.conn.transaction():
-            self.conn.execute("set local role authenticated")
-            self.conn.execute("select set_config('request.jwt.claims', %s, true)", (claims,))
-            yield self.conn
+        self.conn.execute("savepoint read_as")
+        self.conn.execute("set local role authenticated")
+        self.conn.execute("select set_config('request.jwt.claims', %s, true)", (claims,))
+        try:
+            yield self
+        except BaseException:
+            self.conn.execute("rollback to savepoint read_as")   # also undoes the role switch
+            raise
+        self.conn.execute("release savepoint read_as")
+        self.conn.execute("reset role")
+        self.conn.execute("select set_config('request.jwt.claims', '', true)")

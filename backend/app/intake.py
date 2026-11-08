@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass, field
 
 from app.config import DEFAULT_CLINIC, ClinicConfig
-from app.grounding import check_reply
+from app.grounding import check_reply, verify_claims
 from app.knowledge import Chunk
 from app.llm import LLMUnavailable, SafeLLM
 from app.logs import log_event
@@ -165,8 +165,10 @@ def handle_turn(text: str, llm: SafeLLM, clinic: ClinicConfig = DEFAULT_CLINIC,
         return TurnResult(reply, risk, show_send_to_clinic=True, advice_generated=False)
 
     checked = check_reply(reply, sources, patient_text=with_history(text, history))
+    checked = verify_claims(checked, sources, llm, patient_text=with_history(text, history),
+                            known_identifiers=known_identifiers)
     log_event("reply_grounding", grounded=checked.grounded, dropped=checked.dropped,
-              citations=len(checked.citations))
+              citations=len(checked.citations), verified=checked.verified)
     if not checked.grounded:
         return TurnResult(not_covered_reply(clinic), risk, show_send_to_clinic=True, advice_generated=False,
                           reply_confidence="low")

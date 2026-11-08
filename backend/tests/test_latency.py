@@ -5,6 +5,7 @@ import json
 import threading
 
 from app.extraction import EXTRACT_SYSTEM
+from app.grounding import VERIFY_SYSTEM
 from app.intake import RISK_SYSTEM
 from app.llm import TIMEOUTS, SafeLLM
 from app.pipeline import handle_patient_message
@@ -15,12 +16,15 @@ class RecordingClient:
         self.timeouts = {}
 
     def complete(self, system, user, timeout_s=10.0, json_mode=False):
-        purpose = "risk" if system == RISK_SYSTEM else "extract" if system == EXTRACT_SYSTEM else "reply"
+        purpose = ("risk" if system == RISK_SYSTEM else "extract" if system == EXTRACT_SYSTEM
+                   else "verify" if system == VERIFY_SYSTEM else "reply")
         self.timeouts[purpose] = timeout_s
         if purpose == "risk":
             return json.dumps({"risk_level": "low", "reason": "t", "confidence": "high"})
         if purpose == "extract":
             return json.dumps({"operations": []})
+        if purpose == "verify":
+            return json.dumps({"results": [{"n": 1, "supported": True}]})
         return "The clinic is open Monday to Friday from 8:30am to 5:30pm. [S1]"
 
 
@@ -28,7 +32,7 @@ def test_each_call_type_gets_its_own_short_timeout(repo, cipher, guest_session):
     client = RecordingClient()
     llm = SafeLLM(client)
     handle_patient_message(repo, llm, cipher, guest_session.id, "what are your opening hours?", extractor_llm=llm)
-    assert client.timeouts == {"risk": TIMEOUTS["risk"], "reply": TIMEOUTS["reply"], "extract": TIMEOUTS["extract"]}
+    assert client.timeouts == {p: TIMEOUTS[p] for p in ("risk", "reply", "extract", "verify")}
     assert all(t < 15 for t in client.timeouts.values())  # the old timeout that let a stall last 16s
 
 

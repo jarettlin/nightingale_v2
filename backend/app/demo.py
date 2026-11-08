@@ -12,6 +12,7 @@ import re
 from app.conversion import ConsentChoices, SignupDetails, convert, start_auth
 from app.crypto import Cipher
 from app.escalation import Staff, send_to_clinic
+from app.grounding import VERIFY_SYSTEM
 from app.intake import RISK_SYSTEM
 from app.llm import SafeLLM
 from app.pipeline import handle_patient_message
@@ -26,6 +27,9 @@ class ScriptedLLM:
     def complete(self, system: str, user: str, timeout_s: float = 10.0, json_mode: bool = False) -> str:
         if system == RISK_SYSTEM:
             return json.dumps({"risk_level": "low", "reason": "scripted", "confidence": "med"})
+        if system == VERIFY_SYSTEM:   # a well-behaved checker: every statement is supported
+            n = len(re.findall(r"^\d+\. ", user.split("STATEMENTS:")[-1], re.M))
+            return json.dumps({"results": [{"n": i, "supported": True} for i in range(1, n + 1)]})
         source = re.search(r"\[S1\] \(.*?\)\n(.+?)(?:\n\n\[S|\Z)", system, re.S)
         if not source:
             return "I don't have that information."

@@ -57,7 +57,7 @@ cd frontend && npm run dev
 ## Tests
 
 ```bash
-cd backend && .venv/bin/pytest -q                 # 283 tests; Supabase ones run when DATABASE_URL is set
+cd backend && .venv/bin/pytest -q                 # 293 tests; Supabase ones run when DATABASE_URL is set
 cd supabase/tests && npm install && npm run check # RLS policies on an in-memory Postgres (32 checks)
 cd backend && .venv/bin/python scripts/eval_risk.py --runs 3   # risk gate vs 52 labelled messages (uses OpenAI)
 cd backend && .venv/bin/python scripts/smoke_auth.py           # real Supabase anonymous sign-in against a running API
@@ -76,9 +76,9 @@ The brief's required tests:
 | access control | `tests/test_access_control.py` |
 | trust ("are you a real doctor?") | `tests/test_trust.py` |
 
-Further tests cover grounding (citations resolve to real file spans), channels (rules config, staff referral,
+Further tests cover grounding (citations resolve to real file spans; the model claim check), channels (rules config, staff referral,
 comment webhook, lead form, funnel, warm leads), latency, the OpenAI client's failure handling, the demo seed,
-and a Supabase round trip of every feature.
+and a Supabase round trip of every feature, including RLS on the backend's own reads.
 
 ## Where redaction happens
 
@@ -106,8 +106,11 @@ and a Supabase round trip of every feature.
    yours returns **404**, so IDs can't be probed. Staff routes return **403** for non-staff, are scoped to one
    clinic, and show patient content only while the patient's **current** consent allows it.
 4. **Inside the database,** RLS ([`supabase/migrations/…_rls.sql`](supabase/migrations)) enforces the same
-   rules for anyone using a browser token. Clients have **no write grants**: only the backend writes, after
-   redaction and the risk gate.
+   rules for anyone using a browser token, **and for the backend's own reads**: every read that returns
+   messages, memory, escalations or replies runs as the signed-in user (`read_as` in
+   [`app/supabase_repo.py`](backend/app/supabase_repo.py)), so a bug in a Python check still can't leak
+   another person's rows. Clients have **no write grants**: only the backend writes, after redaction and the
+   risk gate.
 5. **Staff accounts are invite-only.** `/staff` never creates accounts, and roles are granted and revoked with
    `scripts/add_staff.py`.
 
@@ -116,7 +119,8 @@ and a Supabase round trip of every feature.
 | What fails | What happens |
 |---|---|
 | Model times out or errors | Each call has a short timeout and one retry. Risk falls back to the rules with a **Medium** floor. Replies become an honest "can't answer reliably, send it to the clinic?". Extraction falls back to the offline rules. |
-| Model returns junk or unsupported claims | JSON is validated. Grounding drops any sentence with a fake citation, an invented number or a meaning that contradicts its source, and if nothing cited survives, the reply is "I'd rather not guess". |
+| Model returns junk or unsupported claims | JSON is validated. Grounding rules drop any sentence with a fake citation, an invented number or a meaning that contradicts its source. A second model call then checks each remaining sentence against its source and drops what isn't stated there. If nothing cited survives, the reply is "I'd rather not guess". |
+| Claim checker times out | The rule-checked reply stands, but its confidence is capped at Medium (never High) and the event is logged. |
 | Redaction fails | The model is never called. The patient gets a safe template. The original is still stored encrypted. |
 | Supabase Auth unreachable | **503** with the emergency number. No token is trusted without a verified signature. |
 | Database down | The request fails (500). The patient sees "didn't send, try again", and the emergency notice stays on screen. |

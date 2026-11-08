@@ -337,12 +337,15 @@ def create_app(deps: Deps) -> FastAPI:
 
     @app.get("/sessions/{session_id}/messages")
     def get_messages(session_id: str, who: Principal = Depends(principal), repo: Repository = Depends(get_repo)):
-        return {"messages": thread(repo, [owned_session(repo, who, session_id)])}
+        session = owned_session(repo, who, session_id)
+        with repo.read_as(who.auth_user_id):
+            return {"messages": thread(repo, [session])}
 
     @app.get("/sessions/{session_id}/profile")
     def get_profile(session_id: str, who: Principal = Depends(principal), repo: Repository = Depends(get_repo)):
         session = owned_session(repo, who, session_id)
-        return {"profile": profile(repo.memory_store(session.id))}
+        with repo.read_as(who.auth_user_id):
+            return {"profile": profile(repo.memory_store(session.id))}
 
     @app.post("/sessions/{session_id}/auth-started", status_code=204)
     def auth_started(session_id: str, who: Principal = Depends(principal), repo: Repository = Depends(get_repo)):
@@ -392,8 +395,9 @@ def create_app(deps: Deps) -> FastAPI:
         conversation, not a new empty one."""
         if who.role == "staff":
             return {"sessions": []}
-        sessions = sorted(repo.sessions_for_auth_user(who.auth_user_id), key=lambda s: s.landing_timestamp,
-                          reverse=True)
+        with repo.read_as(who.auth_user_id):
+            sessions = sorted(repo.sessions_for_auth_user(who.auth_user_id), key=lambda s: s.landing_timestamp,
+                              reverse=True)
         return {"sessions": [{"id": s.id, "source_channel": s.source_channel, "landing_timestamp": s.landing_timestamp,
                               "converted": s.patient_id is not None} for s in sessions]}
 
@@ -417,11 +421,12 @@ def create_app(deps: Deps) -> FastAPI:
         if not who.patient_id:
             return {"escalations": []}
         out = []
-        for e in repo.escalations_for_patient(who.patient_id):
-            replies = [{"text": deps.cipher.decrypt(r.body_encrypted), "created_at": r.created_at}
-                       for r in repo.clinician_responses(e.id) if r.visible_to_patient]
-            out.append({"id": e.id, "status": e.status, "created_at": e.created_at,
-                        "response_due_at": e.response_due_at, "responses": replies})
+        with repo.read_as(who.auth_user_id):
+            for e in repo.escalations_for_patient(who.patient_id):
+                replies = [{"text": deps.cipher.decrypt(r.body_encrypted), "created_at": r.created_at}
+                           for r in repo.clinician_responses(e.id) if r.visible_to_patient]
+                out.append({"id": e.id, "status": e.status, "created_at": e.created_at,
+                            "response_due_at": e.response_due_at, "responses": replies})
         return {"escalations": out}
 
     # -------------------------------------------------------------- staff
@@ -450,16 +455,18 @@ def create_app(deps: Deps) -> FastAPI:
 
     @app.get("/staff/escalations")
     def queue(who: Principal = Depends(staff_only), repo: Repository = Depends(get_repo)):
+        with repo.read_as(who.auth_user_id):
+            rows = repo.escalation_queue(who.staff.clinic_id)
         return {"escalations": [
             {"id": e.id, "risk_level": e.risk_level, "reason": e.reason, "status": e.status,
              "created_at": e.created_at, "response_due_at": e.response_due_at,
              "summary": [b["text"] for b in e.triage_summary]}
-            for e in repo.escalation_queue(who.staff.clinic_id)]}
+            for e in rows]}
 
     @app.get("/staff/escalations/{escalation_id}")
     def review(escalation_id: str, who: Principal = Depends(staff_only), repo: Repository = Depends(get_repo)):
         try:
-            packet = review_packet(repo, deps.cipher, who.staff, escalation_id)
+            packet = review_packet(repo, deps.cipher, who.staff, escalation_id, reader=who.auth_user_id)
         except EscalationError:
             raise HTTPException(404, "Not found")
         return {"escalation": asdict(packet["escalation"]), "sources": packet["sources"],
@@ -491,10 +498,11 @@ def create_app(deps: Deps) -> FastAPI:
         for pid in repo.list_patients(who.staff.clinic_id):
             if not consented(repo, pid):
                 continue
-            sessions = repo.sessions_for_patient(pid)
-            out.append({"patient_id": pid,
-                        "first_touch": sessions[0].attribution() if sessions else None,
-                        "profile": profile(repo.memory_store(sessions[0].id)) if sessions else {}})
+            with repo.read_as(who.auth_user_id):
+                sessions = repo.sessions_for_patient(pid)
+                out.append({"patient_id": pid,
+                            "first_touch": sessions[0].attribution() if sessions else None,
+                            "profile": profile(repo.memory_store(sessions[0].id)) if sessions else {}})
         return {"patients": out}
 
     @app.get("/staff/patients/{patient_id}/messages")
@@ -504,6 +512,7 @@ def create_app(deps: Deps) -> FastAPI:
             raise HTTPException(404, "Not found")
         repo.add_audit("staff", "patient_thread_viewed", actor_id=who.staff.id, target_table="patient",
                        target_id=patient_id)
-        return {"messages": thread(repo, repo.sessions_for_patient(patient_id), include_internal=True)}
+        with repo.read_as(who.auth_user_id):
+            return {"messages": thread(repo, repo.sessions_for_patient(patient_id), include_internal=True)}
 
     return app

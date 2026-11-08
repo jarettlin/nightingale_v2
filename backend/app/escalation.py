@@ -15,6 +15,7 @@ Promises to the patient are honest and depend on risk. High risk is not a
 the escalation sits at the top of the queue.
 """
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -222,19 +223,23 @@ def respond(repo: Repository, cipher: Cipher, staff: Staff, escalation_id: str, 
     return response
 
 
-def review_packet(repo: Repository, cipher: Cipher, staff: Staff, escalation_id: str) -> dict:
-    """What a clinician opens: payload plus the original words behind every bullet."""
+def review_packet(repo: Repository, cipher: Cipher, staff: Staff, escalation_id: str,
+                  reader: str | None = None) -> dict:
+    """What a clinician opens: payload plus the original words behind every bullet.
+    With `reader` (the staff member's auth user id), the patient's words are read
+    under RLS as that person, so the database re-checks clinic and consent."""
     escalation = _authorise(repo, staff, escalation_id)
     ids = {escalation.trigger_message_id}
     ids |= {mid for b in escalation.triage_summary for mid in b["provenance_message_ids"]}
     ids |= {item["provenance_message_id"] for item in escalation.profile_snapshot}
     sources = {}
-    for mid in ids:
-        m = repo.get_message(mid)
-        if m is not None:
-            sources[mid] = {"text": cipher.decrypt(m.content_encrypted), "sent_as": m.sent_as,
-                            "created_at": m.created_at, "risk_level": m.risk_level}
+    with (repo.read_as(reader) if reader else nullcontext()):
+        for mid in ids:
+            m = repo.get_message(mid)
+            if m is not None:
+                sources[mid] = {"text": cipher.decrypt(m.content_encrypted), "sent_as": m.sent_as,
+                                "created_at": m.created_at, "risk_level": m.risk_level}
+        responses = repo.clinician_responses(escalation.id)
     repo.add_audit("staff", "escalation_viewed", actor_id=staff.id, target_table="escalation",
                    target_id=escalation.id, sources=len(sources))
-    return {"escalation": escalation, "sources": sources,
-            "responses": repo.clinician_responses(escalation.id)}
+    return {"escalation": escalation, "sources": sources, "responses": responses}

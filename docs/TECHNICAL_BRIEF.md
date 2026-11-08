@@ -16,10 +16,12 @@ case they can act on without the patient repeating themselves. All data is synth
                 │  JWT on every request
                 ▼
  FastAPI ── per message: redact → risk gate (rules, then model may only RAISE) ─┬─ escalate: safety template, no advice call
-                │                                                                └─ low: retrieve clinic docs → grounded reply → citation check
+                │                                                                └─ low: retrieve clinic docs → grounded reply
+                │                                                                       → citation rules → model claim check (can only remove)
                 │   in parallel: fact extraction → validated, append-only memory
                 ▼
- Supabase Postgres: RLS on every table, clients cannot write; pg_cron purges guest data after 7 days
+ Supabase Postgres: RLS on every table, also applied to the backend's own reads (read_as);
+                    clients cannot write; pg_cron purges guest data after 7 days
  OpenAI gpt-4.1-mini: sees redacted text only, through one gateway (SafeLLM)
 ```
 
@@ -96,22 +98,29 @@ ratings flag where a lawyer should be consulted.
   ectopic pregnancy), which is why the model's second opinion matters.
 - **Grounding:** made-up services, prices and durations, fake citations, and "we offer X" when the clinic
   doesn't are all dropped (tested on real OpenAI output). Every citation resolves to an exact character span
-  of a versioned clinic file.
-- **Latency:** 2.6–3.9 s per message end to end, after per-call timeouts and parallel extraction. Before,
-  one stalled call took 18 s.
-- **Tests:** 283 backend tests, including a Supabase round trip of every feature, plus 32 RLS checks on
+  of a versioned clinic file. The model claim check then catches what the rules can't see: "most patients
+  find the injections painless" shares almost every word with its source and passes the rules, but the
+  checker drops it. It kept every correct sentence across 5 repeats and 10 real questions, for 0.8–1.4 s
+  extra per answer.
+- **Latency:** 2.6–3.9 s per message end to end before the claim check, after per-call timeouts and parallel
+  extraction (before those, one stalled call took 18 s). The reply step alone now averages 2.8 s across 10
+  real questions, including the check.
+- **Tests:** 293 backend tests, including a Supabase round trip of every feature, plus 32 RLS checks on
   PGlite.
 
 ## 6. Trade-offs and what we cut
 
-- **Grounding checks are rules, not NLI.** They catch invented numbers, fake citations and negation flips,
-  but a cleverly reworded outside fact can pass. Next step: a cheap second model call to check each claim.
+- **Grounding is rules plus a model claim check, not a trained NLI model.** The checker uses the same
+  model family as the reply, so it can share blind spots; it can only remove sentences, and if it is down
+  the rule-checked reply stands with confidence capped at Medium. The trade-off is about one extra second
+  per answer.
 - **Keyword retrieval (BM25), not embeddings.** It's predictable and testable for 8 documents; a larger
   knowledge base would need embeddings.
 - **Outbox senders for email and Meta.** Real sending needs a provider and a reviewed Meta app; the interfaces
   are in place.
-- **Backend reads check access in code;** RLS protects direct database access. Routing the backend's reads
-  through `as_user()` is the next hardening step.
+- **Two locks on every read of patient content.** The API checks ownership, clinic and consent in Python,
+  and the read itself runs as that signed-in user (`read_as`), so RLS filters it again. Writes, the audit
+  log and staff-wide funnel counts still run as the backend role, by design.
 - **Single clinic, in-memory rate limits, localhost deployment.** Multi-instance would need Redis or Postgres
   limits.
 - **Not built:** real Meta integration, dormant-lead recall, voice.

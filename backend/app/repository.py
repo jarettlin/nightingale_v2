@@ -6,6 +6,7 @@ sees this interface, so its logic is tested without a network.
 """
 
 import uuid
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
@@ -180,6 +181,7 @@ class Repository(Protocol):
     def list_messages(self, lead_session_id: str) -> list[StoredMessage]: ...
     def get_message(self, message_id: str) -> StoredMessage | None: ...
     def memory_store(self, lead_session_id: str): ...
+    def read_as(self, auth_user_id: str) -> AbstractContextManager: ...
     def add_funnel_event(self, lead_session_id: str, event: str, value_kind: str | None = None) -> None: ...
     def add_audit(self, actor_type: str, action: str, actor_id: str | None = None,
                   target_table: str | None = None, target_id: str | None = None, **metadata) -> None: ...
@@ -409,6 +411,12 @@ class InMemoryRepo:
 
     def memory_store(self, lead_session_id: str) -> _SessionMemory:
         return _SessionMemory(self, lead_session_id)
+
+    @contextmanager
+    def read_as(self, auth_user_id: str):
+        # No database here, so no RLS: the API's own checks are the only lock.
+        # The Supabase repo enforces the policies (tests/test_supabase_repo.py).
+        yield self
 
     def add_funnel_event(self, lead_session_id: str, event: str, value_kind: str | None = None) -> None:
         session = self.sessions[lead_session_id]

@@ -186,3 +186,105 @@ def test_api_returns_citations_for_the_frontend(api):
     [citation] = body["reply"]["citations"]
     assert citation["heading"] == "Opening hours" and citation["source_doc"] == "kb/hours-and-booking.md"
     assert body["reply"]["confidence"] == "high" and "[S1]" in body["reply"]["text"]
+
+
+# ------------------------------------------------------------- model claim check
+
+import json  # noqa: E402
+
+from app.grounding import VERIFY_SYSTEM, verify_claims  # noqa: E402
+from app.intake import handle_turn  # noqa: E402
+from app.llm import FakeLLM  # noqa: E402
+
+
+class Checker:
+    """Answers only the claim check, with scripted verdicts (n -> supported)."""
+
+    def __init__(self, verdicts=None, raw=None):
+        self.verdicts, self.raw, self.prompts = verdicts or {}, raw, []
+
+    def complete(self, system, user, timeout_s=10.0, json_mode=False):
+        assert system == VERIFY_SYSTEM
+        self.prompts.append({"user": user, "json_mode": json_mode, "timeout_s": timeout_s})
+        if self.raw is not None:
+            return self.raw
+        return json.dumps({"results": [{"n": n, "supported": ok} for n, ok in self.verdicts.items()]})
+
+
+def _process_reply():
+    src = sources("how does egg freezing work and how long does it take?")
+    n = {c.heading: i for i, c in enumerate(src, 1)}
+    # Sentence 2 shares nearly all its words with the source, so the rules keep it,
+    # but "painless" and "most patients" are the model's own additions.
+    reply = (f"Treatment usually starts with about 10 to 14 days of daily hormone injections. [S{n['How the process works']}] "
+             f"Most patients find the daily hormone injections painless. [S{n['How the process works']}] "
+             f"Happy to help!")
+    return src, reply
+
+
+def test_a_reworded_outside_claim_passes_the_rules_but_not_the_checker():
+    src, reply = _process_reply()
+    by_rules = check_reply(reply, src)
+    assert "painless" in by_rules.text and by_rules.dropped == 0      # the gap the checker closes
+
+    checker = Checker({1: True, 2: False})
+    g = verify_claims(by_rules, src, SafeLLM(checker))
+    assert "painless" not in g.text and "10 to 14 days" in g.text and "Happy to help!" in g.text
+    assert g.grounded and g.verified and g.dropped == 1 and g.confidence == "med"
+    # Only factual sentences are checked, in strict JSON mode with its own short timeout
+    [call] = checker.prompts
+    assert call["json_mode"] and call["timeout_s"] == 5.0
+    assert "1. Treatment usually" in call["user"] and "Happy to help" not in call["user"].split("STATEMENTS:")[1]
+
+
+def test_when_every_claim_is_rejected_the_patient_gets_an_honest_answer():
+    src, reply = _process_reply()
+    llm = SafeLLM(_Router(reply, verdicts={1: False, 2: False}))
+    turn = handle_turn("how does egg freezing work?", llm, sources=src)
+    assert "rather not guess" in turn.reply and not turn.advice_generated and turn.reply_confidence == "low"
+
+
+def test_a_statement_the_checker_skips_counts_as_unsupported():
+    src, reply = _process_reply()
+    g = verify_claims(check_reply(reply, src), src, SafeLLM(Checker({1: True})))   # said nothing about 2
+    assert "painless" not in g.text and g.dropped == 1
+
+
+def test_the_checker_can_only_remove_never_add():
+    src, reply = _process_reply()
+    sneaky = Checker(raw=json.dumps({"results": [{"n": 1, "supported": True}, {"n": 2, "supported": True},
+                                                 {"n": 3, "supported": True, "text": "We guarantee success."}]}))
+    g = verify_claims(check_reply(reply, src), src, SafeLLM(sneaky))
+    assert "guarantee" not in g.text and g.text == check_reply(reply, src).text
+
+
+@pytest.mark.parametrize("client", [FakeLLM(fail=True), Checker(raw="not json"), Checker(raw='{"results": "x"}')])
+def test_checker_outage_keeps_the_rule_checked_reply_but_never_high_confidence(client):
+    src, reply = _process_reply()
+    g = verify_claims(check_reply(reply, src), src, SafeLLM(client))
+    assert g.text == check_reply(reply, src).text and g.verified is False and g.confidence == "med"
+
+
+def test_the_checker_never_sees_identifiers():
+    src = sources("how does egg freezing work?")
+    checker = Checker({1: True})
+    g = check_reply("Treatment usually starts with about 10 to 14 days of daily hormone injections. [S1]"
+                    if src[0].heading == "How the process works" else f"{src[0].text.split('. ')[0]}. [S1]", src)
+    verify_claims(g, src, SafeLLM(checker), patient_text="My name is Sarah Tan, how does egg freezing work?",
+                  known_identifiers=["sarah.tan@example.com"])
+    assert "Sarah" not in checker.prompts[0]["user"] and "[REDACTED]" in checker.prompts[0]["user"]
+
+
+class _Router:
+    """Risk: low. Reply: the scripted reply. Claim check: scripted verdicts."""
+
+    def __init__(self, reply, verdicts):
+        self.reply, self.checker = reply, Checker(verdicts)
+
+    def complete(self, system, user, timeout_s=10.0, json_mode=False):
+        from app.intake import RISK_SYSTEM
+        if system == RISK_SYSTEM:
+            return json.dumps({"risk_level": "low", "reason": "t", "confidence": "high"})
+        if system == VERIFY_SYSTEM:
+            return self.checker.complete(system, user, timeout_s, json_mode)
+        return self.reply

@@ -4,6 +4,7 @@ import re
 import pytest
 
 from app.crypto import ephemeral_cipher
+from app.grounding import VERIFY_SYSTEM
 from app.intake import RISK_SYSTEM
 from app.llm import SafeLLM
 from app.repository import InMemoryRepo
@@ -22,6 +23,9 @@ class RoutingLLM:
         self.prompts.append({"system": system, "user": user, "json_mode": json_mode})
         if system == RISK_SYSTEM:
             return json.dumps({"risk_level": "low", "reason": "test", "confidence": "high"})
+        if system == VERIFY_SYSTEM:   # a well-behaved checker: every statement is supported
+            n = len(re.findall(r"^\d+\. ", user.split("STATEMENTS:")[-1], re.M))
+            return json.dumps({"results": [{"n": i, "supported": True} for i in range(1, n + 1)]})
         if self.answer is not None:
             return self.answer
         source = re.search(r"\[S1\] \(.*?\)\n(.+?)(?:\n\n\[S|\Z)", system, re.S)
