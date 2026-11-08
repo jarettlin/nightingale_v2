@@ -17,7 +17,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from app.memory import MemoryItem
-from app.repository import Consent, ContactPoint, LeadContact, LeadSession, StoredMessage
+from app.repository import (ClinicianResponse, Consent, ContactPoint, Escalation, LeadContact, LeadSession,
+                            StoredMessage)
 
 LEAD_FIELDS = ["id", "clinic_id", "source_channel", "identity_level", "campaign_id", "creative",
                "landing_page", "referral_topic", "guest_auth_user_id", "patient_id", "stage",
@@ -26,6 +27,9 @@ MESSAGE_FIELDS = ["id", "lead_session_id", "sender", "sent_as", "content_encrypt
                   "redaction_ok", "redaction_entities", "risk_level", "risk_reason", "risk_confidence",
                   "risk_source", "risk_assessed_at", "risk_rule_codes", "intents", "escalation_required",
                   "reply_confidence", "advice_generated", "in_reply_to", "created_at"]
+ESCALATION_FIELDS = ["id", "clinic_id", "lead_session_id", "patient_id", "trigger_message_id", "reason",
+                     "risk_level", "triage_summary", "profile_snapshot", "attribution", "response_due_at",
+                     "status", "assigned_to", "created_at", "updated_at"]
 MEMORY_FIELDS = ["id", "kind", "value", "status", "provenance_message_id", "updated_at", "detail",
                  "supersedes_id", "conflict_with_id", "extracted_by"]
 
@@ -130,6 +134,11 @@ class SupabaseRepo:
             (lead_session_id,)).fetchall()
         return [StoredMessage(**_str(r)) for r in rows]
 
+    def get_message(self, message_id: str) -> StoredMessage | None:
+        row = self.conn.execute(f"select {', '.join(MESSAGE_FIELDS)} from public.message where id = %s",
+                                (message_id,)).fetchone()
+        return StoredMessage(**_str(row)) if row else None
+
     def memory_store(self, lead_session_id: str) -> _DbMemory:
         return _DbMemory(self.conn, lead_session_id)
 
@@ -227,6 +236,54 @@ class SupabaseRepo:
                                          (lead_session_id,)).fetchone()
             if existing is None or str(existing["patient_id"]) != patient_id:
                 raise ValueError("session already belongs to another patient")
+
+    def add_escalation(self, escalation: Escalation) -> Escalation:
+        values = {f: getattr(escalation, f) for f in ESCALATION_FIELDS}
+        for f in ("triage_summary", "profile_snapshot", "attribution"):
+            values[f] = Jsonb(values[f])
+        self.conn.execute(
+            f"""insert into public.escalation ({", ".join(ESCALATION_FIELDS)})
+                values ({", ".join(f"%({f})s" for f in ESCALATION_FIELDS)})""", values)
+        return escalation
+
+    def _escalations(self, where: str, params: tuple) -> list[Escalation]:
+        rows = self.conn.execute(
+            f"select {', '.join(ESCALATION_FIELDS)} from public.escalation where {where}", params).fetchall()
+        return [Escalation(**_str(r)) for r in rows]
+
+    def get_escalation(self, escalation_id: str) -> Escalation | None:
+        rows = self._escalations("id = %s", (escalation_id,))
+        return rows[0] if rows else None
+
+    def open_escalation_for_patient(self, patient_id: str) -> Escalation | None:
+        rows = self._escalations("patient_id = %s and status in ('sent', 'acknowledged', 'in_review') "
+                                 "order by created_at desc limit 1", (patient_id,))
+        return rows[0] if rows else None
+
+    def update_escalation(self, escalation_id: str, status: str, assigned_to: str | None = None) -> None:
+        self.conn.execute(
+            """update public.escalation set status = %s, assigned_to = coalesce(%s, assigned_to), updated_at = now()
+               where id = %s""", (status, assigned_to, escalation_id))
+
+    def escalation_queue(self, clinic_id: str) -> list[Escalation]:
+        return self._escalations(
+            """clinic_id = %s and status <> 'closed'
+               order by case risk_level when 'high' then 0 when 'med' then 1 when 'low' then 2 else 3 end,
+                        created_at""", (clinic_id,))
+
+    def add_clinician_response(self, response: ClinicianResponse) -> None:
+        self.conn.execute(
+            """insert into public.clinician_response (id, escalation_id, author_id, body_encrypted, visible_to_patient, created_at)
+               values (%s, %s, %s, %s, %s, %s)""",
+            (response.id, response.escalation_id, response.author_id, response.body_encrypted,
+             response.visible_to_patient, response.created_at))
+
+    def clinician_responses(self, escalation_id: str) -> list[ClinicianResponse]:
+        rows = self.conn.execute(
+            """select id, escalation_id, author_id, body_encrypted, visible_to_patient, created_at
+               from public.clinician_response where escalation_id = %s order by created_at""",
+            (escalation_id,)).fetchall()
+        return [ClinicianResponse(**_str(r)) for r in rows]
 
     @contextmanager
     def as_user(self, auth_user_id: str):

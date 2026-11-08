@@ -88,6 +88,36 @@ def test_conversion_round_trip_on_supabase(db_repo, clinic_id, llm, cipher):
     assert db_repo.conn.execute("select app.patient_consented(%s) as ok", (result.patient_id,)).fetchone()["ok"]
 
 
+def test_escalation_round_trip_on_supabase(db_repo, clinic_id, llm, cipher):
+    from app.conversion import ConsentChoices, SignupDetails, convert
+    from app.escalation import send_to_clinic
+    from app.pipeline import handle_patient_message
+
+    session = db_repo.create_lead_session(clinic_id=clinic_id, source_channel="staff_referral",
+                                          identity_level="staff_referred",
+                                          referral_topic="asked about egg freezing at today's visit")
+    handle_patient_message(db_repo, llm, cipher, session.id, "I take Advil")
+    convert(db_repo, cipher, session.id,
+            SignupDetails(None, "synthetic2@example.com", "2026-11-08T10:00:00+00:00", "+60123456780"),
+            ConsentChoices(data_sharing=True))
+    trigger = handle_patient_message(db_repo, llm, cipher, session.id, "my chest feels funny")
+
+    sent = send_to_clinic(db_repo, cipher, session.id)
+    again = send_to_clinic(db_repo, cipher, session.id)
+    stored = db_repo.get_escalation(sent.escalation.id)
+
+    assert again.already_open and again.escalation.id == stored.id
+    assert stored.trigger_message_id == trigger.patient_message_id and stored.reason == "med_risk"
+    assert stored.attribution["referral_topic"] == "asked about egg freezing at today's visit"
+    assert any("staff referral" in b["text"] for b in stored.triage_summary)
+    assert {(i["kind"], i["value"]) for i in stored.profile_snapshot} >= {("medication", "Advil")}
+    assert db_repo.get_lead_session(session.id).stage == "escalation_sent"
+
+    db_repo.update_escalation(stored.id, "acknowledged")
+    assert db_repo.get_escalation(stored.id).status == "acknowledged"
+    assert [e.id for e in db_repo.escalation_queue(clinic_id)] == [stored.id]
+
+
 def test_unknown_session_id_is_none(db_repo):
     assert db_repo.get_lead_session("not-a-uuid") is None
     assert db_repo.get_lead_session("00000000-0000-0000-0000-000000000000") is None

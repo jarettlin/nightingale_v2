@@ -100,7 +100,46 @@ class Consent:
     recorded_at: str = field(default_factory=now)
 
 
+OPEN_ESCALATION = ("sent", "acknowledged", "in_review")
+
+
+@dataclass
+class Escalation:
+    clinic_id: str
+    lead_session_id: str
+    patient_id: str
+    trigger_message_id: str
+    reason: str                         # high_risk | med_risk | wants_diagnosis | medication_change | patient_request
+    risk_level: str | None
+    triage_summary: list                # [{"text", "provenance_message_ids"}], 1–5 items
+    profile_snapshot: list              # current facts at send time, with provenance
+    attribution: dict                   # acquisition context, frozen at send time
+    response_due_at: str
+    status: str = "sent"
+    assigned_to: str | None = None
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: str = field(default_factory=now)
+    updated_at: str = field(default_factory=now)
+
+
+@dataclass
+class ClinicianResponse:
+    escalation_id: str
+    author_id: str
+    body_encrypted: str
+    visible_to_patient: bool = True
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: str = field(default_factory=now)
+
+
 class Repository(Protocol):
+    def add_escalation(self, escalation: Escalation) -> Escalation: ...
+    def get_escalation(self, escalation_id: str) -> Escalation | None: ...
+    def open_escalation_for_patient(self, patient_id: str) -> Escalation | None: ...
+    def update_escalation(self, escalation_id: str, status: str, assigned_to: str | None = None) -> None: ...
+    def escalation_queue(self, clinic_id: str) -> list[Escalation]: ...
+    def add_clinician_response(self, response: ClinicianResponse) -> None: ...
+    def clinician_responses(self, escalation_id: str) -> list[ClinicianResponse]: ...
     def create_lead_session(self, **fields) -> LeadSession: ...
     def get_lead_session(self, lead_session_id: str) -> LeadSession | None: ...
     def advance_stage(self, lead_session_id: str, stage: str) -> None: ...
@@ -116,6 +155,7 @@ class Repository(Protocol):
     def link_session_to_patient(self, lead_session_id: str, patient_id: str) -> None: ...
     def add_message(self, message: StoredMessage) -> StoredMessage: ...
     def list_messages(self, lead_session_id: str) -> list[StoredMessage]: ...
+    def get_message(self, message_id: str) -> StoredMessage | None: ...
     def memory_store(self, lead_session_id: str): ...
     def add_funnel_event(self, lead_session_id: str, event: str, value_kind: str | None = None) -> None: ...
     def add_audit(self, actor_type: str, action: str, actor_id: str | None = None,
@@ -165,6 +205,36 @@ class InMemoryRepo:
         self.patients: dict[str, dict] = {}
         self.contacts: list[ContactPoint] = []
         self.consent_rows: list[Consent] = []
+        self.escalations: dict[str, Escalation] = {}
+        self.responses: list[ClinicianResponse] = []
+
+    def add_escalation(self, escalation: Escalation) -> Escalation:
+        self.escalations[escalation.id] = escalation
+        return escalation
+
+    def get_escalation(self, escalation_id: str) -> Escalation | None:
+        return self.escalations.get(escalation_id)
+
+    def open_escalation_for_patient(self, patient_id: str) -> Escalation | None:
+        return next((e for e in self.escalations.values()
+                     if e.patient_id == patient_id and e.status in OPEN_ESCALATION), None)
+
+    def update_escalation(self, escalation_id: str, status: str, assigned_to: str | None = None) -> None:
+        e = self.escalations[escalation_id]
+        e.status, e.updated_at = status, now()
+        e.assigned_to = assigned_to or e.assigned_to
+
+    def escalation_queue(self, clinic_id: str) -> list[Escalation]:
+        # Highest risk first, then oldest: a compassion queue, not a sales list
+        rank = {"high": 0, "med": 1, "low": 2, None: 3}
+        return sorted((e for e in self.escalations.values() if e.clinic_id == clinic_id and e.status != "closed"),
+                      key=lambda e: (rank[e.risk_level], e.created_at))
+
+    def add_clinician_response(self, response: ClinicianResponse) -> None:
+        self.responses.append(response)
+
+    def clinician_responses(self, escalation_id: str) -> list[ClinicianResponse]:
+        return [r for r in self.responses if r.escalation_id == escalation_id]
 
     def set_lead_contact(self, contact: LeadContact) -> None:
         self.lead_contacts[contact.lead_session_id] = contact
@@ -235,6 +305,9 @@ class InMemoryRepo:
 
     def list_messages(self, lead_session_id: str) -> list[StoredMessage]:
         return [m for m in self.messages if m.lead_session_id == lead_session_id]
+
+    def get_message(self, message_id: str) -> StoredMessage | None:
+        return next((m for m in self.messages if m.id == message_id), None)
 
     def memory_store(self, lead_session_id: str) -> _SessionMemory:
         return _SessionMemory(self, lead_session_id)
