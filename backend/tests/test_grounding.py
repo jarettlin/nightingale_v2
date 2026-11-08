@@ -178,6 +178,16 @@ def test_follow_up_question_uses_conversation_context(repo, model, llm, cipher, 
     assert "[S1]" not in reply_prompt["user"].split("LATEST MESSAGE")[0]  # old markers stripped
 
 
+def test_a_complete_short_question_is_not_glued_to_the_previous_topic(repo, llm, cipher, guest_session):
+    # Found live: this question was searched together with the egg-freezing message
+    # before it, came back with egg-freezing documents, and no answer could be cited.
+    handle_patient_message(repo, llm, cipher, guest_session.id,
+                           "I take metformin and my periods are irregular, does that affect egg freezing?")
+    result = handle_patient_message(repo, llm, cipher, guest_session.id, "how much does IVF cost?")
+    assert result.citations and result.citations[0]["source_doc"] == "kb/ivf.md"
+    assert "18,000" in result.reply
+
+
 def test_api_returns_citations_for_the_frontend(api):
     guest = make_token("g-1", anonymous=True)
     sid = api.post("/sessions", json={}, headers=bearer(guest)).json()["session"]["id"]

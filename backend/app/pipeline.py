@@ -19,13 +19,15 @@ Safety replies and "please send this to the clinic" are not value events: they
 are the right thing to do, but they don't count as us having helped yet.
 """
 
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 
 from app.config import DEFAULT_CLINIC, ClinicConfig
 from app.crypto import Cipher
-from app.extraction import extract
+from app.extraction import extract, rule_extract
 from app.grounding import MARKER
 from app.intake import handle_turn
 from app.knowledge import KnowledgeBase, default_kb, tokens
@@ -38,6 +40,34 @@ from app.risk import RiskAssessment
 
 
 HISTORY_TURNS = 6
+
+# Once the reply is ready, how much longer it may wait for the fact-extraction
+# model call. Seen live: extraction stalled for 7s and held a finished reply
+# hostage. After the grace period the offline rules extract the facts instead
+# (the same fallback as a model outage) and the reply goes out.
+EXTRACTION_GRACE_S = 1.5
+
+# Shared, so a late extraction call can finish (and be discarded) in the
+# background without the request waiting for it, as `with ThreadPoolExecutor()`
+# would on exit.
+_extraction_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="extract")
+
+
+# Words that point back at an earlier message: "how much does IT cost?"
+REFERS_BACK = re.compile(r"\b(it|its|that|this|these|those|they|them|one)\b", re.I)
+
+
+def _retrieve(kb: KnowledgeBase, query: str, history: list[tuple[str, str]]) -> list:
+    """A follow-up like "how much does it cost?" is searched together with the
+    previous patient message, so "it" means egg freezing. A complete question is
+    searched on its own: found live, "how much does IVF cost?" was glued to an
+    earlier egg-freezing message and came back with egg-freezing documents."""
+    previous = next((content for sender, content in reversed(history) if sender == "patient"), None)
+    if not previous:
+        return kb.search(query)
+    if REFERS_BACK.search(query) and len(tokens(query)) < 4:
+        return kb.search(f"{previous} {query}")
+    return kb.search(query) or kb.search(f"{previous} {query}")
 
 
 class SessionNotFound(Exception):
@@ -66,7 +96,8 @@ class PipelineResult:
 def handle_patient_message(repo: Repository, llm: SafeLLM, cipher: Cipher, lead_session_id: str, text: str,
                            clinic: ClinicConfig = DEFAULT_CLINIC, extractor_llm: SafeLLM | None = None,
                            known_identifiers: list[str] | None = None,
-                           kb: KnowledgeBase | None = None) -> PipelineResult:
+                           kb: KnowledgeBase | None = None,
+                           extraction_grace_s: float = EXTRACTION_GRACE_S) -> PipelineResult:
     started = time.perf_counter()
     session = repo.get_lead_session(lead_session_id)
     if session is None:
@@ -83,11 +114,8 @@ def handle_patient_message(repo: Repository, llm: SafeLLM, cipher: Cipher, lead_
 
     redaction = redact(text, known_identifiers)
     query = redaction.redacted_text if redaction.ok else ""
-    previous = next((content for sender, content in reversed(history) if sender == "patient"), None)
-    if previous and len(tokens(query)) < 4:
-        query = f"{previous} {query}"  # "how much does it cost?" -> search with what "it" was
     # Retrieval runs locally on redacted text: only clinic documents come back
-    sources = (kb or default_kb()).search(query)
+    sources = _retrieve(kb or default_kb(), query, history)
 
     # Fact extraction doesn't depend on the risk check or the reply, so its model
     # call runs alongside them. Only the model call is in the thread: the profile
@@ -95,10 +123,16 @@ def handle_patient_message(repo: Repository, llm: SafeLLM, cipher: Cipher, lead_
     # (Memory is extracted even for high-risk messages: the clinician needs those facts.)
     store = repo.memory_store(session.id)
     current = store.current()
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        pending_extraction = pool.submit(extract, text, current, extractor_llm)
-        turn = handle_turn(text, llm, clinic, known_identifiers, sources=sources, history=history)
-        extraction = pending_extraction.result()
+    pending_extraction = _extraction_pool.submit(extract, text, current, extractor_llm)
+    turn = handle_turn(text, llm, clinic, known_identifiers, sources=sources, history=history)
+    try:
+        extraction = pending_extraction.result(timeout=extraction_grace_s)
+    except FutureTimeout:
+        # The late model result is never applied: it would land after this
+        # request's transaction, out of order with the next message's facts.
+        log_event("extraction_late", grace_ms=int(extraction_grace_s * 1000))
+        extraction = rule_extract(text, current)
+        extraction.source = "rules (llm late)"
     risk = turn.risk
 
     patient_msg = repo.add_message(StoredMessage(

@@ -57,7 +57,7 @@ cd frontend && npm run dev
 ## Tests
 
 ```bash
-cd backend && .venv/bin/pytest -q                 # 293 tests; Supabase ones run when DATABASE_URL is set
+cd backend && .venv/bin/pytest -q                 # 296 tests; Supabase ones run when DATABASE_URL is set
 cd supabase/tests && npm install && npm run check # RLS policies on an in-memory Postgres (32 checks)
 cd backend && .venv/bin/python scripts/eval_risk.py --runs 3   # risk gate vs 52 labelled messages (uses OpenAI)
 cd backend && .venv/bin/python scripts/smoke_auth.py           # real Supabase anonymous sign-in against a running API
@@ -120,6 +120,7 @@ and a Supabase round trip of every feature, including RLS on the backend's own r
 |---|---|
 | Model times out or errors | Each call has a short timeout and one retry. Risk falls back to the rules with a **Medium** floor. Replies become an honest "can't answer reliably, send it to the clinic?". Extraction falls back to the offline rules. |
 | Model returns junk or unsupported claims | JSON is validated. Grounding rules drop any sentence with a fake citation, an invented number or a meaning that contradicts its source. A second model call then checks each remaining sentence against its source and drops what isn't stated there. If nothing cited survives, the reply is "I'd rather not guess". |
+| Fact extraction is slow | The reply waits at most 1.5 s for it. After that the offline rules extract the facts for that message and the late model result is discarded. |
 | Claim checker times out | The rule-checked reply stands, but its confidence is capped at Medium (never High) and the event is logged. |
 | Redaction fails | The model is never called. The patient gets a safe template. The original is still stored encrypted. |
 | Supabase Auth unreachable | **503** with the emergency number. No token is trusted without a verified signature. |

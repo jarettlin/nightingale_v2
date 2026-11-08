@@ -65,3 +65,48 @@ def test_extraction_runs_alongside_the_risk_check(repo, cipher, guest_session):
 def test_facts_still_point_at_the_stored_message_when_extracted_in_parallel(repo, llm, cipher, guest_session):
     result = handle_patient_message(repo, llm, cipher, guest_session.id, "I take Advil")
     assert result.profile["medication"][0]["provenance_message_id"] == result.patient_message_id
+
+
+class StalledExtractor(RecordingClient):
+    """Extraction hangs (as seen live: 7s) until the test lets it go."""
+
+    def __init__(self):
+        super().__init__()
+        self.release = threading.Event()
+
+    def complete(self, system, user, timeout_s=10.0, json_mode=False):
+        if system == EXTRACT_SYSTEM:
+            self.release.wait(timeout=10)
+            return json.dumps({"operations": [{"op": "add", "kind": "medication", "value": "LATE-RESULT"}]})
+        return super().complete(system, user, timeout_s, json_mode)
+
+
+def test_a_stalled_extraction_never_holds_up_a_finished_reply(repo, cipher, guest_session):
+    import time
+    client = StalledExtractor()
+    llm = SafeLLM(client)
+    started = time.perf_counter()
+    try:
+        result = handle_patient_message(repo, llm, cipher, guest_session.id, "I take metformin, what are your hours?",
+                                        extractor_llm=llm, extraction_grace_s=0.2)
+        elapsed = time.perf_counter() - started
+    finally:
+        client.release.set()
+
+    assert elapsed < 2 and result.reply and result.assistant_message_id   # the reply didn't wait for the stall
+    [med] = result.profile["medication"]                             # the offline rules still saved the fact,
+    assert med["value"].lower() == "metformin"                       # pointing at the right message
+    assert med["provenance_message_id"] == result.patient_message_id
+
+
+def test_the_late_model_result_is_never_applied(repo, cipher, guest_session):
+    import time
+    client = StalledExtractor()
+    llm = SafeLLM(client)
+    result = handle_patient_message(repo, llm, cipher, guest_session.id, "I take metformin",
+                                    extractor_llm=llm, extraction_grace_s=0.1)
+    client.release.set()
+    time.sleep(0.2)                                                  # let the stalled call finish in the background
+    values = [m["value"] for m in result.profile.get("medication", [])]
+    stored = [i.value for i in repo.memory_store(guest_session.id).all()]
+    assert "LATE-RESULT" not in values + stored
