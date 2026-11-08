@@ -3,7 +3,7 @@ import { api, ApiError, type ClinicInfo, type Profile } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import { LABELS_SHORT, store } from '../lib/util'
 
-type Step = 'email' | 'check-email' | 'consent'
+type Step = 'email' | 'check-email' | 'consent' | 'share'
 
 /**
  * The trust transition. Two steps, and nothing is shared until the patient says so:
@@ -12,16 +12,21 @@ type Step = 'email' | 'check-email' | 'consent'
  *  2. phone + consent: see exactly what will be shared, untick anything, and choose
  *     data sharing and marketing separately
  */
-export function ContinueSecurely({ open, sessionId, clinic, profile, isAnonymous, onClose, onConverted }: {
+export function ContinueSecurely({ open, sessionId, clinic, profile, isAnonymous, converted, onClose, onConverted,
+  onConsented }: {
   open: boolean
   sessionId: string
   clinic: ClinicInfo
   profile: Profile
   isAnonymous: boolean
+  converted: boolean          // already a patient: only consent can be missing
   onClose: () => void
   onConverted: (openingMessage: string, profile: Profile) => void
+  onConsented: () => void
 }) {
-  const [step, setStep] = useState<Step>(isAnonymous ? 'email' : 'consent')
+  const initialStep = (): Step =>
+    converted ? 'share' : isAnonymous ? (store.get('pendingEmail') ? 'check-email' : 'email') : 'consent'
+  const [step, setStep] = useState<Step>(initialStep)
   const [email, setEmail] = useState('')
   const [phone, setPhone] = useState('')
   const [share, setShare] = useState(true)
@@ -30,9 +35,21 @@ export function ContinueSecurely({ open, sessionId, clinic, profile, isAnonymous
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => { setStep(isAnonymous ? (store.get('pendingEmail') ? 'check-email' : 'email') : 'consent') },
-    [isAnonymous, open])
-  useEffect(() => { if (open) api.authStarted(sessionId).catch(() => {}) }, [open, sessionId])
+  useEffect(() => { setStep(initialStep()) }, [isAnonymous, converted, open]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (open && !converted) api.authStarted(sessionId).catch(() => {}) }, [open, converted, sessionId])
+
+  async function shareNow(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true); setError(null)
+    try {
+      await api.updateConsent({ data_sharing: true })
+      onConsented()
+    } catch {
+      setError('Something went wrong. Please try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const items = Object.entries(profile).flatMap(([kind, list]) => list.map((i) => ({ ...i, kind })))
 
@@ -118,6 +135,15 @@ export function ContinueSecurely({ open, sessionId, clinic, profile, isAnonymous
             </label>
 
             <button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Continue'}</button>
+          </form>
+        )}
+
+        {step === 'share' && (
+          <form onSubmit={shareNow}>
+            <p>To send this, {clinic.name}'s nurse team needs to see your conversation. You said no to sharing
+              earlier, and that's fine. You can change it now, and nothing is shared unless you do.</p>
+            <button className="primary" disabled={busy}>{busy ? 'Sending…' : `Share with ${clinic.name} and send`}</button>
+            <p className="hint">You can withdraw this later. The nurse team then stops seeing your conversation.</p>
           </form>
         )}
 

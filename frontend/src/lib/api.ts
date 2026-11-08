@@ -90,6 +90,8 @@ export const api = {
   authStarted: (sid: string) => request<void>('POST', `/sessions/${sid}/auth-started`),
   convert: (sid: string, body: { phone: string; data_sharing: boolean; marketing: boolean; exclude_memory_ids: string[] }) =>
     request<{ patient_id: string; opening_message: string; profile: Profile }>('POST', `/sessions/${sid}/convert`, body),
+  updateConsent: (body: { data_sharing?: boolean; marketing?: boolean }) =>
+    request<{ data_sharing: boolean; marketing: boolean }>('POST', '/me/consent', body),
   escalate: (sid: string) =>
     request<{ escalation_id: string; confirmation: string; already_open: boolean; response_due_at: string }>(
       'POST', `/sessions/${sid}/escalations`, {}),

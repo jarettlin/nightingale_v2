@@ -24,7 +24,8 @@ from pydantic import BaseModel, Field
 
 from app.auth import AuthError, AuthUnavailable, Principal, TokenVerifier, resolve_principal
 from app.config import ClinicConfig
-from app.conversion import ConsentChoices, ConversionError, SignupDetails, conversion_offer, convert, start_auth
+from app.conversion import (ConsentChoices, ConversionError, SignupDetails, conversion_offer, convert,
+                            current_consent, start_auth, update_consent)
 from app.crypto import Cipher
 from app.escalation import (CLINICAL_ROLES, EscalationError, NeedsAccount, NeedsConsent, move, respond,
                             review_packet, send_to_clinic)
@@ -76,6 +77,11 @@ class Convert(BaseModel):
     data_sharing: bool
     marketing: bool = False
     exclude_memory_ids: list[str] = []
+
+
+class ConsentChange(BaseModel):
+    data_sharing: bool | None = None
+    marketing: bool | None = None
 
 
 class Escalate(BaseModel):
@@ -278,6 +284,21 @@ def create_app(deps: Deps) -> FastAPI:
                           reverse=True)
         return {"sessions": [{"id": s.id, "source_channel": s.source_channel, "landing_timestamp": s.landing_timestamp,
                               "converted": s.patient_id is not None} for s in sessions]}
+
+    @app.get("/me/consent")
+    def get_consent(who: Principal = Depends(principal), repo: Repository = Depends(get_repo)):
+        if not who.patient_id:
+            raise HTTPException(404, "Not found")
+        return current_consent(repo, who.patient_id)
+
+    @app.post("/me/consent")
+    def set_consent(body: ConsentChange, who: Principal = Depends(principal), repo: Repository = Depends(get_repo)):
+        if not who.patient_id:
+            raise HTTPException(404, "Not found")
+        sessions = repo.sessions_for_patient(who.patient_id)
+        latest = max(sessions, key=lambda s: s.landing_timestamp).id if sessions else None
+        return update_consent(repo, who.patient_id, deps.clinic.clinic_id, latest,
+                              data_sharing=body.data_sharing, marketing=body.marketing)
 
     @app.get("/me/escalations")
     def my_escalations(who: Principal = Depends(principal), repo: Repository = Depends(get_repo)):

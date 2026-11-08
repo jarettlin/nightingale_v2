@@ -224,7 +224,9 @@ export default function App() {
       <ProfileDrawer profile={profile} open={drawerOpen} onClose={() => setDrawerOpen(false)} onJumpTo={jumpTo} />
       {clinic && sessionId && (
         <ContinueSecurely open={sheetOpen} sessionId={sessionId} clinic={clinic} profile={profile}
-                          isAnonymous={isAnonymous} onClose={() => setSheetOpen(false)} onConverted={onConverted} />
+                          isAnonymous={isAnonymous} converted={converted} onClose={() => setSheetOpen(false)}
+                          onConverted={onConverted}
+                          onConsented={() => { setSheetOpen(false); sendToClinic() }} />
       )}
     </div>
   )

@@ -143,6 +143,33 @@ def _retract_excluded(repo, cipher, session, sent_as, exclude_ids) -> None:
                      extracted_by="patient_edit")
 
 
+def current_consent(repo: Repository, patient_id: str) -> dict[str, bool]:
+    """Latest decision per kind wins; no decision means no."""
+    latest: dict[str, Consent] = {}
+    for c in sorted(repo.consents(patient_id), key=lambda c: c.recorded_at):
+        latest[c.kind] = c
+    return {kind: latest[kind].granted if kind in latest else False for kind in ("data_sharing", "marketing")}
+
+
+def update_consent(repo: Repository, patient_id: str, clinic_id: str, lead_session_id: str | None,
+                   data_sharing: bool | None = None, marketing: bool | None = None) -> dict[str, bool]:
+    """Change your mind after sign-up, either way. A new row is added each time
+    (consent is append-only), so the history of every decision is kept."""
+    before = current_consent(repo, patient_id)
+    recorded_at = now()
+    for kind, granted in (("data_sharing", data_sharing), ("marketing", marketing)):
+        if granted is not None and granted != before[kind]:
+            repo.add_consent(Consent(clinic_id=clinic_id, kind=kind, granted=granted, policy_version=POLICY_VERSION,
+                                     patient_id=patient_id, lead_session_id=lead_session_id, recorded_at=recorded_at))
+            repo.add_audit("patient", f"consent_{'granted' if granted else 'withdrawn'}", target_table="consent",
+                           target_id=patient_id, kind=kind)
+    after = current_consent(repo, patient_id)
+    if after["data_sharing"] and not before["data_sharing"] and lead_session_id:
+        repo.add_funnel_event(lead_session_id, "consented")
+        repo.advance_stage(lead_session_id, "consented")
+    return after
+
+
 def convert(repo: Repository, cipher: Cipher, lead_session_id: str, signup: SignupDetails,
             consent: ConsentChoices, clinic: ClinicConfig = DEFAULT_CLINIC) -> ConversionResult:
     session = repo.get_lead_session(lead_session_id)

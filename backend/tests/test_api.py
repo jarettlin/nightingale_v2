@@ -92,6 +92,31 @@ def test_signed_in_non_patient_owns_the_sessions_they_start(api):
     assert api.get("/me/sessions", headers=bearer(verified)).json()["sessions"][0]["id"] == sid
 
 
+def test_patient_who_declined_can_change_their_mind_and_send(api, repo):
+    # Found by hand: after declining at sign-up, Send to Clinic looped back to the
+    # sign-up form, which recorded nothing for an existing patient
+    guest = make_token("user-14", anonymous=True)
+    sid = api.post("/sessions", json={}, headers=bearer(guest)).json()["session"]["id"]
+    api.post(f"/sessions/{sid}/messages", json={"text": "my chest feels funny"}, headers=bearer(guest))
+    patient = make_token("user-14", email="fourteen@example.com")
+    api.post(f"/sessions/{sid}/convert", json={"phone": "+60123456789", "data_sharing": False}, headers=bearer(patient))
+
+    blocked = api.post(f"/sessions/{sid}/escalations", json={}, headers=bearer(patient))
+    assert blocked.status_code == 409 and blocked.json()["detail"]["code"] == "needs_consent"
+
+    assert api.post("/me/consent", json={"data_sharing": True}, headers=bearer(patient)).json() == \
+           {"data_sharing": True, "marketing": False}
+    assert api.post(f"/sessions/{sid}/escalations", json={}, headers=bearer(patient)).status_code == 201
+    kinds = [(c.kind, c.granted) for c in sorted(repo.consent_rows, key=lambda c: c.recorded_at)]
+    assert ("data_sharing", False) in kinds and kinds[-1] == ("data_sharing", True)  # history kept
+
+
+def test_consent_endpoints_are_for_patients_only(api):
+    guest = make_token("user-15", anonymous=True)
+    assert api.post("/me/consent", json={"data_sharing": True}, headers=bearer(guest)).status_code == 404
+    assert api.get("/me/consent", headers=bearer(guest)).status_code == 404
+
+
 def test_guest_messages_are_rate_limited(api):
     sid = api.post("/sessions", json={}, headers=bearer(GUEST)).json()["session"]["id"]
     codes = [api.post(f"/sessions/{sid}/messages", json={"text": "hi"}, headers=bearer(GUEST)).status_code
